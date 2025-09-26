@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Cache directory for photos and audio clips -->
+    <cache-path
+        name="cache"
+        path="." />
+    <!-- External cache as a fallback for some OEMs -->
+    <external-cache-path
+        name="external_cache"
+        path="." />
+</paths>

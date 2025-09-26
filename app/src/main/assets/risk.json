@@ -1,0 +1,115 @@
+{
+    "consequenceData": [
+        {
+            "level": "5",
+            "severity_factor": 1000,
+            "cost": ">$100 million",
+            "productionLoss": "停产>1个月",
+            "safety": "重大人员伤亡，如多人死亡或永久性残疾",
+            "other": "严重环境破坏，影响周边社区，政府介入，公司全球声誉受损"
+        },
+        {
+            "level": "4",
+            "severity_factor": 300,
+            "cost": "50million− 100 million",
+            "productionLoss": "停产2-4周",
+            "safety": "多人重伤或一人死亡，长期健康影响",
+            "other": "显著环境影响，可能超出矿区范围，影响当地社区，公司国家声誉受损"
+        },
+        {
+            "level": "3",
+            "severity_factor": 100,
+            "cost": "10million− 50 million",
+            "productionLoss": "停产1-2周",
+            "safety": "单人重伤或多人轻伤，短期健康影响",
+            "other": "中等环境影响，限于矿区内，可能引起当地关注，公司地区声誉受损"
+        },
+        {
+            "level": "2",
+            "severity_factor": 30,
+            "cost": "1million− 10 million",
+            "productionLoss": "停产<1周",
+            "safety": "医疗处理伤害，限制工作伤害",
+            "other": "轻微环境影响，易于控制，可能引起局部关注，公司形象略有受损"
+        },
+        {
+            "level": "1",
+            "severity_factor": 10,
+            "cost": "<$1 million",
+            "productionLoss": "无显著停产",
+            "safety": "急救处理伤害，无长期影响",
+            "other": "无或极低环境影响，无社区或政府关注，公司形象不受影响"
+        }
+    ],
+    "likelihoodData": [
+        {
+            "level": "A",
+            "description": "几乎确定",
+            "likelihood_factor": 3,
+            "criteria": "风险事件频繁发生，如设备故障率高，安全规程执行不力1111"
+        },
+        {
+            "level": "B",
+            "description": "可能",
+            "likelihood_factor": 1,
+            "criteria": "风险事件偶尔发生，如特定天气条件下的作业风险"
+        },
+        {
+            "level": "C",
+            "description": "有可能",
+            "likelihood_factor": 0.3,
+            "criteria": "风险事件在某些情况下可能发生，如特定地质条件下的开采风险"
+        },
+        {
+            "level": "D",
+            "description": "不太可能",
+            "likelihood_factor": 0.1,
+            "criteria": "风险事件在异常情况下可能发生，如极端天气事件导致的风险"
+        },
+        {
+            "level": "E",
+            "description": "罕见",
+            "likelihood_factor": 0.03,
+            "criteria": "风险事件在极不寻常的情况下可能发生，如自然灾害导致的重大事故"
+        }
+    ],
+    "priorityData": [
+        {
+            "priority": "P1",
+            "criteria": "[900.00, 3000.00]",
+            "action_required_and_remediation_timeframe": "常规检查监控，无需紧急行动",
+            "minValue": 900,
+            "maxValue": 3000,
+            "minInclusive": "[",
+            "maxInclusive": "]"
+        },
+        {
+            "priority": "P2",
+            "criteria": "[90.00, 900.00)",
+            "action_required_and_remediation_timeframe": "计划在24个月内进行修复，如设备升级或安全培训",
+            "minValue": 90,
+            "maxValue": 900,
+            "minInclusive": "[",
+            "maxInclusive": ")"
+        },
+        {
+            "priority": "P3",
+            "criteria": "[30.00, 90.00)",
+            "action_required_and_remediation_timeframe": "计划在12个月内进行修复，如结构加固或工艺改进，若无法按时完成，需聘请第三方专家评估",
+            "minValue": 30,
+            "maxValue": 90,
+            "minInclusive": "[",
+            "maxInclusive": ")"
+        },
+        {
+            "priority": "P4",
+            "criteria": "[0.30, 30.00)",
+            "action_required_and_remediation_timeframe": "立即停止相关作业，直至风险消除，遵循报告程序，实施必要控制措施（如关闭、隔离等），需经总经理批准方可继续作业",
+            "minValue": 0.3,
+            "maxValue": 30,
+            "minInclusive": "[",
+            "maxInclusive": ")"
+        }
+    ],
+    "timestamp": "2025-09-04T02:03:37.039Z"
+}
