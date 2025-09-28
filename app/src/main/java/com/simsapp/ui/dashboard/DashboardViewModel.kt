@@ -45,17 +45,26 @@ class DashboardViewModel @Inject constructor(
     private val projectDetailDao: ProjectDetailDao
 ) : ViewModel() {
 
+    init {
+        // 应用启动时更新所有项目的计数字段，确保显示正确的数据
+        viewModelScope.launch {
+            try {
+                projectRepository.updateAllProjectCounts()
+                Log.i("DashboardViewModel", "Updated project counts on initialization")
+            } catch (e: Exception) {
+                Log.w("DashboardViewModel", "Failed to update project counts on initialization: ${e.message}")
+            }
+        }
+    }
+
     /**
-     * 首页项目列表状态流（过滤示例数据）。
+     * 首页项目列表状态流。
      * - 数据来源：Room 的 Flow<List<ProjectEntity>>
-     * - 通过 map 过滤掉调试示例项目（projectUid = "demo-uid"），避免首页显示模拟数据
+     * - 显示所有项目数据，不进行过滤
      * - 转换为 StateFlow 以便 Compose 直接 collectAsState()
      */
     val projects: StateFlow<List<ProjectEntity>> =
         projectRepository.getProjects()
-            .map { list ->
-                list.filterNot { it.projectUid?.trim() == "demo-uid" }
-            }
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5000),
@@ -65,14 +74,48 @@ class DashboardViewModel @Inject constructor(
     /**
      * 新增：历史 Defect 数量映射（key: projectUid, value: count）。
      * - 订阅 ProjectDetail 表变化，解析 raw_json 中的 history_defect_list 长度。
+     * - 同时订阅 Project 表的 defect_count 字段，优先使用数据库中的实际统计值
      */
     val historyDefectCounts: StateFlow<Map<String, Int>> =
-        projectDetailDao.getAll()
-            .map { list ->
-                list.mapNotNull { detail ->
-                    val uid = detail.projectUid?.trim().orEmpty()
+        combine(
+            projectDetailDao.getAll(),
+            projectRepository.getProjects()
+        ) { detailList, projectList ->
+            val detailCounts = detailList.mapNotNull { detail ->
+                val uid = detail.projectUid?.trim().orEmpty()
+                if (uid.isBlank()) return@mapNotNull null
+                uid to countHistoryDefects(detail.rawJson)
+            }.toMap()
+            
+            // 优先使用Project表中的defect_count，如果为0则使用详情解析的数量
+            projectList.mapNotNull { project ->
+                val uid = project.projectUid?.trim().orEmpty()
+                if (uid.isBlank()) return@mapNotNull null
+                val count = if (project.defectCount > 0) {
+                    project.defectCount
+                } else {
+                    detailCounts[uid] ?: 0
+                }
+                uid to count
+            }.toMap()
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyMap()
+        )
+
+    /**
+     * 新增：事件数量映射（key: projectUid, value: count）。
+     * - 从 Project 表的 event_count 字段获取
+     */
+    val eventCounts: StateFlow<Map<String, Int>> =
+        projectRepository.getProjects()
+            .map { projectList ->
+                projectList.mapNotNull { project ->
+                    val uid = project.projectUid?.trim().orEmpty()
                     if (uid.isBlank()) return@mapNotNull null
-                    uid to countHistoryDefects(detail.rawJson)
+                    uid to project.eventCount
                 }.toMap()
             }
             .stateIn(
@@ -128,6 +171,7 @@ class DashboardViewModel @Inject constructor(
     /**
      * 函数：syncProjects
      * 说明：触发项目列表同步。若已处于加载中则直接返回（防抖）。
+     * 同步完成后自动更新所有项目的计数字段。
      * @param username 可选覆盖 X-USERNAME 请求头（默认由拦截器注入 test）
      * @param authorization 可选覆盖 Authorization（默认由拦截器在 debug 环境注入）
      */
@@ -142,6 +186,14 @@ class DashboardViewModel @Inject constructor(
             )
             result
                 .onSuccess { count ->
+                    // 同步成功后，更新所有项目的计数字段
+                    try {
+                        projectRepository.updateAllProjectCounts()
+                        Log.i("SIMS-SYNC", "Updated project counts after sync")
+                    } catch (e: Exception) {
+                        Log.w("SIMS-SYNC", "Failed to update project counts after sync: ${e.message}")
+                    }
+                    
                     // 查询当前数据库中的项目总数，便于通过 logcat 验证
                     try {
                         val total = projectRepository.getProjectCount()

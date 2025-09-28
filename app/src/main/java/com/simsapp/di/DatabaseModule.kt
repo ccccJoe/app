@@ -140,6 +140,17 @@ object DatabaseModule {
     }
 
     /**
+     * Database migration from version 6 to 7.
+     * Adds type field to DefectEntity for defect type classification.
+     */
+    private val MIGRATION_6_7 = object : Migration(6, 7) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 添加type字段到defect表
+            database.execSQL("ALTER TABLE defect ADD COLUMN type TEXT NOT NULL DEFAULT ''")
+        }
+    }
+
+    /**
      * Provide the Room database instance.
      *
      * - 在 DEBUG 构建下启用 fallbackToDestructiveMigration 以避免历史版本迁移缺失导致的启动崩溃。
@@ -149,7 +160,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "sims.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
             // 仅调试构建启用破坏性迁移，避免老设备上的历史 DB 版本导致崩溃
             .apply {
                 if (com.simsapp.BuildConfig.DEBUG) fallbackToDestructiveMigration()

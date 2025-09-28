@@ -1,4 +1,4 @@
-package com.simsapp.ui.event
+package com.example.sims_android.ui.event
 
 import android.Manifest
 import android.media.MediaRecorder
@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -28,8 +29,10 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,12 +48,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.simsapp.ui.event.EventFormViewModel
+import com.simsapp.data.local.entity.DefectEntity
+import com.simsapp.data.local.entity.EventEntity
+import com.example.sims_android.ui.event.EventFormViewModel
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
@@ -76,6 +82,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import androidx.compose.foundation.Canvas
+// 新增：图片预览和异步处理相关 import
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 import kotlin.math.PI
 import kotlin.math.sin
@@ -98,6 +107,7 @@ import android.util.Log
  fun EventFormScreen(
      projectName: String,
     eventId: String = "",
+     defectId: String = "",
      onBack: () -> Unit,
      onOpenStorage: () -> Unit,
      selectedStorage: List<String> = emptyList()
@@ -128,39 +138,97 @@ import android.util.Log
     var showDeleteDialog by remember { mutableStateOf(false) }
     // 删除状态标记，用于阻止删除后的自动保存
     var isDeleted by remember { mutableStateOf(false) }
+    
+    // 新增：关联历史缺陷相关状态
+    val selectedDefects = remember { mutableStateListOf<DefectEntity>() }
+    var showDefectSelectionDialog by remember { mutableStateOf(false) }
+    
+    // 记录初始数据状态，用于检测数据是否发生变化
+    var initialLocation by remember { mutableStateOf("") }
+    var initialDescription by remember { mutableStateOf("") }
+    var initialPhotoFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    var initialAudioFiles by remember { mutableStateOf<List<File>>(emptyList()) }
+    var initialRiskResult by remember { mutableStateOf<RiskAssessmentResult?>(null) }
+    var initialSelectedDefects by remember { mutableStateOf<List<DefectEntity>>(emptyList()) }
 
     // 新增：页面离开时自动保存逻辑
     DisposableEffect(Unit) {
         onDispose {
-            // 页面离开时，如果有非空数据且未被删除则自动保存到数据库
+            // 页面离开时，如果有非空数据且未被删除则检查是否需要自动保存
             if (!isDeleted && (location.isNotBlank() || description.isNotBlank() || photoFiles.isNotEmpty() || audioFiles.isNotEmpty() || riskResult != null)) {
-                // 使用runBlocking确保在页面销毁前完成保存
-                runBlocking {
-                    try {
-                        // 判断是新建还是编辑模式
-                        val isEditMode = eventId.isNotBlank()
-                        val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
-                        
-                        val result = viewModel.saveEventToRoom(
-                            projectName = projectName,
-                            location = location,
-                            description = description,
-                            currentEventId = currentEventId,
-                            isEditMode = isEditMode,
-                            riskResult = riskResult,
-                            photoFiles = photoFiles,
-                            audioFiles = audioFiles
-                        )
-                        
-                        result.onSuccess { savedEventId ->
-                            Log.d("EventFormScreen", "Auto-saved event on page exit: projectName=$projectName, location=$location, descLen=${description.length}, isEditMode=$isEditMode, savedEventId=$savedEventId")
-                        }.onFailure { e ->
-                            Log.e("EventFormScreen", "Failed to auto-save event on page exit: ${e.message}", e)
+                // 检测数据是否发生变化
+                val hasDataChanged = location != initialLocation ||
+                    description != initialDescription ||
+                    photoFiles.map { it.absolutePath } != initialPhotoFiles.map { it.absolutePath } ||
+                    audioFiles.map { it.absolutePath } != initialAudioFiles.map { it.absolutePath } ||
+                    riskResult != initialRiskResult ||
+                    selectedDefects.toList() != initialSelectedDefects
+                
+                // 只有在数据确实发生变化时才进行自动保存
+                if (hasDataChanged) {
+                    // 使用runBlocking确保在页面销毁前完成保存
+                    runBlocking {
+                        try {
+                            // 判断是新建还是编辑模式
+                            val isEditMode = eventId.isNotBlank()
+                            val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
+                            
+                            val result = viewModel.saveEventToRoom(
+                                projectName = projectName,
+                                location = location,
+                                description = description,
+                                currentEventId = currentEventId,
+                                isEditMode = isEditMode,
+                                riskResult = riskResult,
+                                photoFiles = photoFiles,
+                                audioFiles = audioFiles,
+                                selectedDefects = selectedDefects.toList()
+                            )
+                            
+                            result.onSuccess { savedEventId ->
+                                Log.d("EventFormScreen", "Auto-saved event on page exit (data changed): projectName=$projectName, location=$location, descLen=${description.length}, isEditMode=$isEditMode, savedEventId=$savedEventId")
+                            }.onFailure { e ->
+                                Log.e("EventFormScreen", "Failed to auto-save event on page exit: ${e.message}", e)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("EventFormScreen", "Exception during auto-save on page exit: ${e.message}", e)
                         }
-                    } catch (e: Exception) {
-                        Log.e("EventFormScreen", "Exception during auto-save on page exit: ${e.message}", e)
                     }
+                } else {
+                    Log.d("EventFormScreen", "Skipped auto-save on page exit: no data changes detected")
                 }
+            }
+        }
+    }
+
+    // 处理defectId参数：如果传入了defectId，自动关联该缺陷
+    LaunchedEffect(defectId) {
+        if (defectId.isNotBlank() && projectName.isNotBlank()) {
+            try {
+                // 通过项目名称获取项目实体来获取projectUid
+                val project = viewModel.projectDao.getByExactName(projectName)
+                if (project != null) {
+                    val projectUid = project.projectUid ?: ""
+                    if (projectUid.isNotBlank()) {
+                        // 通过projectUid和defectNo获取缺陷实体
+                        val defect = viewModel.getDefectByProjectUidAndDefectNo(projectUid, defectId)
+                        if (defect != null) {
+                            // 检查是否已经关联了该缺陷
+                            if (!selectedDefects.any { it.defectId == defect.defectId }) {
+                                selectedDefects.add(defect)
+                                Log.d("EventFormScreen", "Auto-associated defect: projectUid=$projectUid, defectNo=$defectId, defectId=${defect.defectId}")
+                            }
+                        } else {
+                            Log.w("EventFormScreen", "Defect not found: projectUid=$projectUid, defectNo=$defectId")
+                        }
+                    } else {
+                        Log.w("EventFormScreen", "Project UID is blank for project: $projectName")
+                    }
+                } else {
+                    Log.w("EventFormScreen", "Project not found: $projectName")
+                }
+            } catch (e: Exception) {
+                Log.e("EventFormScreen", "Failed to auto-associate defect: ${e.message}", e)
             }
         }
     }
@@ -172,7 +240,7 @@ import android.util.Log
             val eventIdLong = eventId.toLongOrNull()
             if (eventIdLong != null) {
                 val result = viewModel.loadEventFromRoom(eventIdLong)
-                result.onSuccess { eventEntity ->
+                result.onSuccess { eventEntity: EventEntity? ->
                     if (eventEntity != null) {
                         // 从数据库加载的数据回显到UI
                         location = eventEntity.location ?: ""
@@ -192,8 +260,8 @@ import android.util.Log
                                 }
                             }
                             riskResult = RiskAssessmentResult(
-                                level = eventEntity.riskLevel,
-                                score = eventEntity.riskScore,
+                                level = eventEntity.riskLevel!!,
+                                score = eventEntity.riskScore!!,
                                 answers = answers
                             )
                         }
@@ -216,10 +284,49 @@ import android.util.Log
                             }
                         }
                         
+                        // 加载关联的缺陷信息
+                        if (eventEntity.defectIds.isNotEmpty() || eventEntity.defectNos.isNotEmpty()) {
+                            // 在协程外部保存eventEntity的引用
+                            val defectIds = eventEntity.defectIds
+                            val defectNos = eventEntity.defectNos
+                            val projectUid = eventEntity.projectUid
+                            
+                            scope.launch {
+                                try {
+                                    val defects = mutableListOf<DefectEntity>()
+                                    
+                                    // 通过defectIds加载缺陷
+                                    defectIds.forEach { defectId: Long ->
+                                        val defect = viewModel.getDefectById(defectId)
+                                        defect?.let { d: DefectEntity ->
+                                            defects.add(d)
+                                        }
+                                    }
+                                    
+                                    // 通过defectNos加载缺陷（如果有projectUid）
+                                    if (projectUid.isNotBlank()) {
+                                        defectNos.forEach { defectNo: String ->
+                                            val defect = viewModel.getDefectByProjectUidAndDefectNo(projectUid, defectNo)
+                                            defect?.let { d: DefectEntity ->
+                                                if (!defects.any { existingDefect -> existingDefect.defectId == d.defectId }) {
+                                                    defects.add(d)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    selectedDefects.clear()
+                                    selectedDefects.addAll(defects)
+                                } catch (e: Exception) {
+                                    Log.e("EventFormScreen", "Failed to load associated defects: ${e.message}", e)
+                                }
+                            }
+                        }
+                        
                         Log.d("EventFormScreen", "Loaded complete event from database: eventId=$eventIdLong, location=$location, " +
                             "descLen=${description.length}, riskLevel=${eventEntity.riskLevel}, photoCount=${photoFiles.size}, audioCount=${audioFiles.size}")
                     }
-                }.onFailure { e ->
+                }.onFailure { e: Throwable ->
                     Log.e("EventFormScreen", "Failed to load event from database: ${e.message}", e)
                 }
             }
@@ -294,6 +401,14 @@ import android.util.Log
                     Log.e("EventFormScreen", "Failed to load event metadata from file: ${e.message}", e)
                 }
             }
+            
+            // 数据加载完成后，更新初始状态用于后续变化检测
+            initialLocation = location
+            initialDescription = description
+            initialPhotoFiles = photoFiles.toList()
+            initialAudioFiles = audioFiles.toList()
+            initialRiskResult = riskResult
+            initialSelectedDefects = selectedDefects.toList()
         }
     }
 
@@ -480,10 +595,11 @@ import android.util.Log
 
     val title = remember(projectName) { if (projectName.isNotBlank()) "New Event - $projectName" else "New Event" }
 
-    Scaffold {
+    Scaffold { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(paddingValues)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(Color(0xFFEAF2FF), Color(0xFFF7FAFF))
@@ -605,21 +721,55 @@ import android.util.Log
                     }
                 }
 
-                // 回显风险评估结果（保持不变）
+                // 风险分析结果卡片
                 if (riskResult != null) {
-                    Spacer(Modifier.height(8.dp))
-                    RiskResultBar(result = riskResult!!, modifier = Modifier.fillMaxWidth())
+                    Card(
+                        shape = RoundedCornerShape(10.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                            Text(text = "Risk Analysis", fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(8.dp))
+                            RiskResultBar(result = riskResult!!, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
                     Spacer(Modifier.height(12.dp))
                 }
 
-                Card(shape = RoundedCornerShape(10.dp)) {
+                // 数据库文件展示区卡片
+                Card(
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
                     Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(text = "Data Results", fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.height(8.dp))
-                        // 原拍照与录音按钮（含英文文案）已移除，功能迁移到顶部图标区
-                        // 这里保留媒体展示区（图片/录音）不变
-                        Spacer(Modifier.height(12.dp))
-                        Text(text = "拍照图片展示区", color = Color(0xFF546E7A), fontSize = 13.sp)
+                        Text(text = "Database Files", fontWeight = FontWeight.SemiBold)
+                        HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
+                        if (selectedStorage.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                selectedStorage.forEach { name ->
+                                    Text(text = name, fontSize = 13.sp, color = Color(0xFF37474F))
+                                }
+                            }
+                        } else {
+                            Spacer(Modifier.height(8.dp))
+                            Text(text = "No files selected", fontSize = 13.sp, color = Color(0xFF90A4AE))
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // 拍照片展示区卡片
+                Card(
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text(text = "Photo Gallery", fontWeight = FontWeight.SemiBold)
                         HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
                         if (photoFiles.isNotEmpty()) {
                             Spacer(Modifier.height(8.dp))
@@ -635,10 +785,23 @@ import android.util.Log
                                     )
                                 }
                             }
+                        } else {
+                            Spacer(Modifier.height(8.dp))
+                            Text(text = "No photos taken", fontSize = 13.sp, color = Color(0xFF90A4AE))
                         }
+                    }
+                }
 
-                        Spacer(Modifier.height(16.dp))
-                        Text(text = "录音文件展示区", color = Color(0xFF546E7A), fontSize = 13.sp)
+                Spacer(Modifier.height(12.dp))
+
+                // 录音文件展示区卡片
+                Card(
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text(text = "Audio Files", fontWeight = FontWeight.SemiBold)
                         HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
                         if (audioFiles.isNotEmpty()) {
                             Spacer(Modifier.height(8.dp))
@@ -650,22 +813,9 @@ import android.util.Log
                                     })
                                 }
                             }
-                        }
-
-                        // 新增：数据库文件展示区（模拟选择结果回显）
-                        Spacer(Modifier.height(16.dp))
-                        Text(text = "数据库文件展示区", color = Color(0xFF546E7A), fontSize = 13.sp)
-                        HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
-                        if (selectedStorage.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                selectedStorage.forEach { name ->
-                                    Text(text = name, fontSize = 13.sp, color = Color(0xFF37474F))
-                                }
-                            }
                         } else {
                             Spacer(Modifier.height(8.dp))
-                            Text(text = "暂无选择", fontSize = 13.sp, color = Color(0xFF90A4AE))
+                            Text(text = "No audio recorded", fontSize = 13.sp, color = Color(0xFF90A4AE))
                         }
                     }
                 }
@@ -674,7 +824,90 @@ import android.util.Log
                     LargePhotoDialog(file = largePhoto!!, onDismiss = { largePhoto = null })
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Associated Historical Defects Module - Moved to bottom above buttons
+                Card(
+                    shape = RoundedCornerShape(10.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Associated Historical Defects",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            IconButton(
+                                onClick = { showDefectSelectionDialog = true },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "Add Defect",
+                                    tint = Color(0xFF1976D2),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        
+                        if (selectedDefects.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                selectedDefects.forEach { defect ->
+                                    DefectInfoCard(
+                                        defect = defect,
+                                        onRemove = { 
+                                            selectedDefects.remove(defect)
+                                            // 立即触发自动保存，确保defect关联变化被保存并更新event_count
+                                            scope.launch {
+                                                try {
+                                                    val isEditMode = eventId.isNotBlank()
+                                                    val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
+                                                    
+                                                    val result = viewModel.saveEventToRoom(
+                                                        projectName = projectName,
+                                                        location = location,
+                                                        description = description,
+                                                        currentEventId = currentEventId,
+                                                        isEditMode = isEditMode,
+                                                        riskResult = riskResult,
+                                                        photoFiles = photoFiles,
+                                                        audioFiles = audioFiles,
+                                                        selectedDefects = selectedDefects.toList()
+                                                    )
+                                                    
+                                                    result.onSuccess { savedEventId ->
+                                                        Log.d("EventFormScreen", "Auto-saved event after defect removal: projectName=$projectName, isEditMode=$isEditMode, savedEventId=$savedEventId, defectCount=${selectedDefects.size}")
+                                                    }.onFailure { e ->
+                                                        Log.e("EventFormScreen", "Failed to auto-save event after defect removal: ${e.message}", e)
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Log.e("EventFormScreen", "Exception during auto-save after defect removal: ${e.message}", e)
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "No associated defects",
+                                fontSize = 13.sp,
+                                color = Color(0xFF90A4AE)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -684,25 +917,25 @@ import android.util.Log
                             if (isSaving) return@Button
                             isSaving = true
                             scope.launch {
-                                // 按钮：仅上传到云，不做本地保存
+                                // Button: Upload to cloud only, no local save
                                 val uid = eventId
                                 if (uid.isBlank()) {
-                                    Toast.makeText(context, "请先生成事件UID（保存本地后重试）", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Please generate event UID first (save locally then retry)", Toast.LENGTH_SHORT).show()
                                     isSaving = false
                                     return@launch
                                 }
                                 val (ok, msg) = viewModel.uploadEvent(uid)
                                 isSaving = false
                                 if (ok) {
-                                    Toast.makeText(context, "上传成功", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Upload successful", Toast.LENGTH_SHORT).show()
                                     onBack()
                                 } else {
-                                    Toast.makeText(context, "上传失败: $msg", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Upload failed: $msg", Toast.LENGTH_LONG).show()
                                 }
                             }
                         },
                         enabled = !isSaving
-                    ) { Text(if (isSaving) "Uploading..." else "同步到云") }
+                    ) { Text(if (isSaving) "Uploading..." else "Sync to Cloud") }
 
                     // 只有在编辑现有事件时才显示删除按钮
                     if (eventId.isNotBlank() && eventId != "0") {
@@ -781,6 +1014,635 @@ import android.util.Log
                 }
             }
         )
+    }
+    
+    // 关联历史缺陷选择对话框
+    if (showDefectSelectionDialog) {
+        DefectSelectionDialog(
+            projectName = projectName,
+            selectedDefects = selectedDefects.toList(),
+            onDismiss = { showDefectSelectionDialog = false },
+            onConfirm = { newSelectedDefects ->
+                selectedDefects.clear()
+                selectedDefects.addAll(newSelectedDefects)
+                showDefectSelectionDialog = false
+                
+                // 立即触发自动保存，确保defect关联变化被保存并更新event_count
+                scope.launch {
+                    try {
+                        val isEditMode = eventId.isNotBlank()
+                        val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
+                        
+                        val result = viewModel.saveEventToRoom(
+                            projectName = projectName,
+                            location = location,
+                            description = description,
+                            currentEventId = currentEventId,
+                            isEditMode = isEditMode,
+                            riskResult = riskResult,
+                            photoFiles = photoFiles,
+                            audioFiles = audioFiles,
+                            selectedDefects = selectedDefects.toList()
+                        )
+                        
+                        result.onSuccess { savedEventId ->
+                            Log.d("EventFormScreen", "Auto-saved event after defect selection change: projectName=$projectName, isEditMode=$isEditMode, savedEventId=$savedEventId, defectCount=${selectedDefects.size}")
+                        }.onFailure { e ->
+                            Log.e("EventFormScreen", "Failed to auto-save event after defect selection change: ${e.message}", e)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("EventFormScreen", "Exception during auto-save after defect selection change: ${e.message}", e)
+                    }
+                }
+            }
+        )
+    }
+}
+
+/**
+ * 缺陷信息卡片组件
+ * 参照历史缺陷列表样式，显示已关联的缺陷信息，包括缺陷编号、风险等级标签、图片缩略图和移除按钮
+ * 添加淡背景颜色以提升视觉效果，支持图片预览功能
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun DefectInfoCard(
+    defect: DefectEntity,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    // State: 当前被预览的大图路径
+    var largePhotoPath by remember { mutableStateOf<String?>(null) }
+    
+    // 获取Context
+    val context = LocalContext.current
+    
+    // 获取缺陷图片路径
+    val defectImages = remember(defect.defectNo, defect.projectUid) {
+        val projectUid = defect.projectUid ?: ""
+        val defectNo = defect.defectNo
+        if (projectUid.isNotBlank() && defectNo.isNotBlank()) {
+            val dir = File(context.filesDir, "history_defects/${projectUid}/${sanitize(defectNo)}")
+            if (dir.exists()) {
+                dir.listFiles()
+                    ?.sortedBy { it.name }
+                    ?.map { it.absolutePath }
+                    ?.take(3) // 最多显示3张图片
+                    ?: emptyList()
+            } else emptyList()
+        } else emptyList()
+    }
+    
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)), // 淡灰色背景
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            // 标题布局：No 与 Tag 同行显示，参照历史缺陷列表样式
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.foundation.layout.FlowRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Defect No 文本
+                    Text(
+                        text = "No.${defect.defectNo}",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFF37474F)
+                    )
+                    
+                    // Risk Rating 标签
+                    Box(
+                        modifier = Modifier
+                            .background(
+                                color = when (defect.riskRating.uppercase()) {
+                                    "P0" -> Color(0xFFB71C1C) // 深红色
+                                    "P1" -> Color(0xFFD32F2F) // 红色
+                                    "P2" -> Color(0xFFFF9800) // 橙色
+                                    "P3" -> Color(0xFFFFC107) // 黄色
+                                    "P4" -> Color(0xFF4CAF50) // 绿色
+                                    else -> Color(0xFF9E9E9E) // 灰色
+                                },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = defect.riskRating,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+                
+                // 移除按钮
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Remove Defect",
+                        tint = Color(0xFF757575),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+            
+            // 图片缩略图展示区域
+            if (defectImages.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                DefectThumbnailRow(
+                    images = defectImages,
+                    onPhotoClick = { path -> largePhotoPath = path }
+                )
+            }
+        }
+    }
+    
+    // 全屏图片预览对话框
+    if (largePhotoPath != null) {
+        DefectLargePhotoDialog(
+            path = largePhotoPath!!,
+            onDismiss = { largePhotoPath = null }
+        )
+    }
+}
+
+/**
+ * 缺陷图片缩略图横向列表
+ * 参照历史缺陷列表的ThumbnailRow实现，支持横向滑动和点击预览
+ */
+@Composable
+private fun DefectThumbnailRow(images: List<String>, onPhotoClick: (String) -> Unit) {
+    if (images.isEmpty()) return
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(images) { path ->
+            DefectFileThumbnail(
+                path = path,
+                size = 72.dp,
+                onClick = { onPhotoClick(path) }
+            )
+        }
+    }
+}
+
+/**
+ * 单个缺陷文件缩略图组件
+ * 参照历史缺陷列表的FileThumbnail实现，异步加载图片并支持点击预览
+ */
+@Composable
+private fun DefectFileThumbnail(path: String, size: Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val bitmapState = remember(path) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(path) {
+        withContext(Dispatchers.IO) {
+            val bmp = runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
+            withContext(Dispatchers.Main) { bitmapState.value = bmp }
+        }
+    }
+    val bmp = bitmapState.value
+    if (bmp != null) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = "defect thumbnail",
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+                .size(size)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onClick() }
+        )
+    } else {
+        Box(
+            modifier = modifier
+                .size(size)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFFF3F4F7))
+                .clickable { onClick() }
+        ) { /* placeholder */ }
+    }
+}
+
+/**
+ * 缺陷大图预览对话框
+ * 参照历史缺陷列表的LargePhotoDialogForPath实现，支持双指缩放和拖拽
+ */
+@Composable
+private fun DefectLargePhotoDialog(path: String, onDismiss: () -> Unit) {
+    val bitmap = remember(path) { BitmapFactory.decodeFile(path) }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+            if (bitmap != null) {
+                var scale by remember { mutableStateOf(1f) }
+                var offset by remember { mutableStateOf(Offset.Zero) }
+                val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+                    scale = (scale * zoomChange).coerceIn(1f, 5f)
+                    offset = offset + panChange
+                }
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Defect Photo Preview",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y
+                        )
+                        .transformable(transformState),
+                    contentScale = ContentScale.Fit
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 生成安全的文件名，移除特殊字符
+ */
+private fun sanitize(name: String): String = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+
+/**
+ * 缺陷选择项组件
+ * 按照历史缺陷列表样式展示，包含编号、风险等级标签和图片缩略图
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun DefectSelectionItem(
+    defect: DefectEntity,
+    isSelected: Boolean,
+    onSelectionChanged: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onSelectionChanged(!isSelected) },
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) Color(0xFFE3F2FD) else Color.White
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        border = if (isSelected) BorderStroke(2.dp, Color(0xFF1565C0)) else null
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 选择框
+            Checkbox(
+                checked = isSelected,
+                onCheckedChange = onSelectionChanged,
+                colors = CheckboxDefaults.colors(
+                    checkedColor = Color(0xFF1565C0),
+                    uncheckedColor = Color(0xFF90A4AE)
+                )
+            )
+            
+            Spacer(modifier = Modifier.width(12.dp))
+            
+            // 缺陷信息区域
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                // 标题行：编号和风险等级标签紧挨着显示，作为一条数据
+                androidx.compose.foundation.layout.FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp), // 减小间距使其更紧密
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "No.${defect.defectNo}",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF222222)
+                    )
+                    if (!defect.riskRating.isNullOrBlank()) {
+                        RiskTag(defect.riskRating!!)
+                    }
+                }
+                
+                // 图片缩略图（如果有的话）
+                val images = defect.images // images 已经是 List<String> 类型
+                if (images.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(images.take(3)) { imagePath -> // 最多显示3张图片
+                            DefectThumbnail(
+                                path = imagePath,
+                                size = 48.dp
+                            )
+                        }
+                        val imageCount = images.size
+                        if (imageCount > 3) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .background(
+                                            Color(0xFFF5F5F5),
+                                            RoundedCornerShape(6.dp)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "+${imageCount - 3}",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF666666)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 风险等级标签组件
+ * 与历史缺陷列表保持一致的样式
+ */
+@Composable
+private fun RiskTag(risk: String) {
+    val (bgColor, textColor) = when (risk.uppercase()) {
+        "P1" -> Color(0xFFFFEBEE) to Color(0xFFD32F2F)
+        "P2" -> Color(0xFFFFF3E0) to Color(0xFFFF5722)
+        "P3" -> Color(0xFFFFF8E1) to Color(0xFFF57C00)
+        "P4" -> Color(0xFFE8F5E8) to Color(0xFF388E3C)
+        "HIGH" -> Color(0xFFFFEBEE) to Color(0xFFD32F2F)
+        "MEDIUM" -> Color(0xFFFFF8E1) to Color(0xFFF57C00)
+        "LOW" -> Color(0xFFE8F5E8) to Color(0xFF388E3C)
+        else -> Color(0xFFF5F5F5) to Color(0xFF666666)
+    }
+    
+    Box(
+        modifier = Modifier
+            .background(bgColor, RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = risk,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium,
+            color = textColor
+        )
+    }
+}
+
+/**
+ * 缺陷图片缩略图组件
+ * 用于在选择对话框中显示缺陷的图片预览
+ */
+@Composable
+private fun DefectThumbnail(path: String, size: Dp) {
+    val bitmap = remember(path) { 
+        runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
+    }
+    
+    Box(
+        modifier = Modifier
+            .size(size)
+            .background(Color(0xFFF5F5F5), RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(6.dp))
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "Defect image",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            // 占位图标
+            Icon(
+                imageVector = Icons.Default.Image,
+                contentDescription = "Image placeholder",
+                modifier = Modifier
+                    .size(size * 0.4f)
+                    .align(Alignment.Center),
+                tint = Color(0xFFBDBDBD)
+            )
+        }
+    }
+}
+
+/**
+ * 缺陷选择对话框
+ * 显示当前项目下的历史缺陷列表，支持多选
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DefectSelectionDialog(
+    projectName: String,
+    selectedDefects: List<DefectEntity>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<DefectEntity>) -> Unit
+) {
+    val viewModel: EventFormViewModel = hiltViewModel()
+    val scope = rememberCoroutineScope()
+    
+    // 获取当前项目的UID（从projectName推导）
+    var projectUid by remember { mutableStateOf("") }
+    var availableDefects by remember { mutableStateOf<List<DefectEntity>>(emptyList()) }
+    var tempSelectedDefects by remember { mutableStateOf(selectedDefects.toMutableList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    
+    // 加载项目UID和缺陷列表
+    LaunchedEffect(projectName) {
+        scope.launch {
+            try {
+                // 通过项目名称获取项目实体来获取projectUid
+                val project = viewModel.projectDao.getByExactName(projectName)
+                if (project != null) {
+                    projectUid = project.projectUid ?: ""
+                    if (projectUid.isNotBlank()) {
+                        // 订阅缺陷列表
+                        launch {
+                            viewModel.getDefectsByProjectUid(projectUid).collect { defects: List<DefectEntity> ->
+                                // 过滤掉duty of care类型的缺陷
+                                availableDefects = defects.filter { defect ->
+                                    val type = defect.type.uppercase()
+                                    // 过滤掉包含DUTY和CARE关键词的类型
+                                    !(type.contains("DUTY") && type.contains("CARE"))
+                                }
+                                isLoading = false
+                            }
+                        }
+                    } else {
+                        isLoading = false
+                    }
+                } else {
+                    isLoading = false
+                }
+            } catch (e: Exception) {
+                Log.e("DefectSelectionDialog", "Failed to load defects: ${e.message}", e)
+                isLoading = false
+            }
+        }
+    }
+    
+    // 底部弹窗样式的对话框
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.5f))
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.85f)
+                    .clickable(enabled = false) { /* 阻止点击穿透 */ },
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                ) {
+                    // 标题栏
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Select Associated Defects",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1565C0)
+                        )
+                        IconButton(onClick = onDismiss) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = Color(0xFF546E7A)
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    HorizontalDivider(color = Color(0xFFE0E0E0))
+                    
+                    // 内容区域
+                    if (isLoading) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = Color(0xFF1565C0))
+                        }
+                    } else if (availableDefects.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No historical defect data available",
+                                fontSize = 16.sp,
+                                color = Color(0xFF90A4AE)
+                            )
+                        }
+                    } else {
+                        // 缺陷列表
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(availableDefects) { defect ->
+                                DefectSelectionItem(
+                                    defect = defect,
+                                    isSelected = tempSelectedDefects.any { it.defectId == defect.defectId },
+                                    onSelectionChanged = { isSelected ->
+                                        tempSelectedDefects = if (isSelected) {
+                                            if (!tempSelectedDefects.any { it.defectId == defect.defectId }) {
+                                                (tempSelectedDefects + defect).toMutableList()
+                                            } else {
+                                                tempSelectedDefects
+                                            }
+                                        } else {
+                                            tempSelectedDefects.filter { it.defectId != defect.defectId }.toMutableList()
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    
+                    HorizontalDivider(color = Color(0xFFE0E0E0))
+                    
+                    // 底部按钮
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color(0xFF546E7A)
+                            )
+                        ) {
+                            Text("Cancel")
+                        }
+                        Button(
+                            onClick = { onConfirm(tempSelectedDefects) },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF1565C0)
+                            )
+                        ) {
+                            Text("Confirm (${tempSelectedDefects.size})")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

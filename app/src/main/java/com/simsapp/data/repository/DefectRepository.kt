@@ -29,6 +29,9 @@ class DefectRepository @Inject constructor(
     /** Get defect by project_uid and defect_no. */
     suspend fun getDefectByProjectUidAndDefectNo(projectUid: String, defectNo: String): DefectEntity? = 
         dao.getByProjectUidAndDefectNo(projectUid, defectNo)
+    
+    /** Get defect by id. */
+    suspend fun getDefectById(defectId: Long): DefectEntity? = dao.getById(defectId)
 
     /** Create or update a defect. */
     suspend fun upsert(defect: DefectEntity): Long = dao.insert(defect)
@@ -38,4 +41,13 @@ class DefectRepository @Inject constructor(
 
     /** Delete a defect by id. */
     suspend fun delete(id: Long) = dao.deleteById(id)
+
+    /** Update event_count for a defect by defect_id. */
+    suspend fun updateEventCount(defectId: Long, eventCount: Int) = dao.updateEventCount(defectId, eventCount)
+
+    /** Increment event_count for a defect by defect_id. */
+    suspend fun incrementEventCount(defectId: Long) = dao.incrementEventCount(defectId)
+
+    /** Decrement event_count for a defect by defect_id. */
+    suspend fun decrementEventCount(defectId: Long) = dao.decrementEventCount(defectId)
 }

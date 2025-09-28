@@ -14,8 +14,8 @@
 package com.simsapp
 
 import com.simsapp.data.local.entity.EventEntity
-import com.simsapp.ui.event.RiskAnswer
-import com.simsapp.ui.event.RiskAssessmentResult
+import com.example.sims_android.ui.event.RiskAnswer
+import com.example.sims_android.ui.event.RiskAssessmentResult
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import org.junit.Test

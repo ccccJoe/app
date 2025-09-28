@@ -51,4 +51,16 @@ interface DefectDao {
     /** Get defect by id. */
     @Query("SELECT * FROM defect WHERE defect_id = :id LIMIT 1")
     suspend fun getById(id: Long): DefectEntity?
+
+    /** Update event_count for a defect by defect_id. */
+    @Query("UPDATE defect SET event_count = :eventCount WHERE defect_id = :defectId")
+    suspend fun updateEventCount(defectId: Long, eventCount: Int)
+
+    /** Increment event_count for a defect by defect_id. */
+    @Query("UPDATE defect SET event_count = event_count + 1 WHERE defect_id = :defectId")
+    suspend fun incrementEventCount(defectId: Long)
+
+    /** Decrement event_count for a defect by defect_id. */
+    @Query("UPDATE defect SET event_count = event_count - 1 WHERE defect_id = :defectId AND event_count > 0")
+    suspend fun decrementEventCount(defectId: Long)
 }

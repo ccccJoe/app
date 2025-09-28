@@ -59,6 +59,10 @@ interface ProjectDao {
     /** 新增：按名称精确解析项目ID（用于实时保存草稿解析归属项目） */
     @Query("SELECT project_id FROM project WHERE name = :name LIMIT 1")
     suspend fun getIdByExactName(name: String): Long?
+    
+    /** 新增：按名称精确获取项目实体（用于缺陷选择对话框获取projectUid） */
+    @Query("SELECT * FROM project WHERE name = :name LIMIT 1")
+    suspend fun getByExactName(name: String): ProjectEntity?
 
     /** Update aggregated counters. */
     @Query("UPDATE project SET defect_count = :defectCount, event_count = :eventCount WHERE project_id = :projectId")

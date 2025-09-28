@@ -13,6 +13,7 @@ import com.simsapp.data.remote.ApiService
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import okhttp3.ResponseBody
 import android.util.Log
 import javax.inject.Inject
@@ -23,6 +24,8 @@ import java.io.File
 import java.io.FileOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.*
 
 /**
  * ProjectRepository
@@ -190,19 +193,6 @@ class ProjectRepository @Inject constructor(
         return try {
             val resp = api.getProjects(endpoint, username, authorization)
             if (!resp.isSuccessful) {
-                // DEBUG 模式：远端失败时，回退插入示例数据用于端到端验证
-                if (com.simsapp.BuildConfig.DEBUG) {
-                    val samples = listOf(
-                        ProjectEntity(name = "Demo Project A", projectUid = "demo-uid-a", projectHash = "hash-a-v1", status = "CREATING", endDate = System.currentTimeMillis() + 3 * 24 * 3600_000, defectCount = 1, eventCount = 2),
-                        ProjectEntity(name = "Demo Project B", projectUid = "demo-uid-b", projectHash = "hash-b-v1", status = "COLLECTING", endDate = System.currentTimeMillis() + 7 * 24 * 3600_000, defectCount = 3, eventCount = 1),
-                        ProjectEntity(name = "Demo Project C", projectUid = "demo-uid-c", projectHash = "hash-c-v1", status = "FINISHED", endDate = System.currentTimeMillis() - 1 * 24 * 3600_000, defectCount = 0, eventCount = 4)
-                    )
-                    projectDao.clearAll()
-                    projectDao.insertAll(samples)
-                    Log.w("SIMS-SYNC", "Remote http ${resp.code()} -> inserted debug samples: ${samples.size}")
-                    _isSyncing.value = false
-                    return Result.success(samples.size)
-                }
                 _isSyncing.value = false
                 return Result.failure(IllegalStateException("http ${resp.code()}"))
             }
@@ -306,17 +296,6 @@ class ProjectRepository @Inject constructor(
             _isSyncing.value = false
             Result.success(remoteEntities.size)
         } catch (e: Exception) {
-            // DEBUG 模式：异常时也进行示例回退，避免 UI 空数据
-            if (com.simsapp.BuildConfig.DEBUG) {
-                val samples = listOf(
-                    ProjectEntity(name = "Demo Project A", projectUid = "demo-uid-a", projectHash = "hash-a-debug", status = "CREATING", endDate = System.currentTimeMillis() + 6 * 24 * 3600_000, defectCount = 2, eventCount = 1)
-                )
-                projectDao.clearAll()
-                projectDao.insertAll(samples)
-                Log.w("SIMS-SYNC", "Exception '${e.message}' -> inserted debug samples: ${samples.size}", e)
-                _isSyncing.value = false
-                return Result.success(samples.size)
-            }
             _isSyncing.value = false
             Result.failure(e)
         }
@@ -434,11 +413,9 @@ class ProjectRepository @Inject constructor(
         )
         for (p in dtPatterns) {
             try {
-                val ldt = java.time.LocalDateTime.parse(
-                    text,
-                    java.time.format.DateTimeFormatter.ofPattern(p)
-                )
-                return ldt.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val formatter = SimpleDateFormat(p.replace("XXX", "Z"), Locale.getDefault())
+                val date = formatter.parse(text)
+                if (date != null) return date.time
             } catch (_: Exception) { }
         }
         // 仅日期格式（按本地零点处理）
@@ -446,16 +423,18 @@ class ProjectRepository @Inject constructor(
         for (p in dPatterns) {
             try {
                 val normalized = if (p.contains('/')) text.replace('-', '/') else text.replace('/', '-')
-                val d = java.time.LocalDate.parse(
-                    normalized,
-                    java.time.format.DateTimeFormatter.ofPattern(p)
-                )
-                return d.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+                val formatter = SimpleDateFormat(p, Locale.getDefault())
+                val date = formatter.parse(normalized)
+                if (date != null) return date.time
             } catch (_: Exception) { }
         }
-        // ISO8601 兜底
+        // ISO8601 兜底 - 简化处理
         return try {
-            java.time.Instant.parse(text).toEpochMilli()
+            if (text.endsWith("Z")) {
+                val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.getDefault())
+                formatter.timeZone = TimeZone.getTimeZone("UTC")
+                formatter.parse(text)?.time
+            } else null
         } catch (_: Exception) { null }
     }
 
@@ -464,6 +443,62 @@ class ProjectRepository @Inject constructor(
      * @return 项目记录条数
      */
     suspend fun getProjectCount(): Int = projectDao.count()
+
+    /**
+     * 函数：updateProjectCounts
+     * 说明：根据数据库中实际的defect和event数据更新项目的defect_count和event_count字段
+     * - defect_count: 该项目下所有缺陷的数量（优先使用defect表，如果为空则从ProjectDetail解析）
+     * - event_count: 该项目下所有缺陷关联的事件总数量
+     * 
+     * @param projectUid 项目唯一标识
+     */
+    suspend fun updateProjectCounts(projectUid: String) {
+        try {
+            // 获取项目实体
+            val project = projectDao.getByUid(projectUid) ?: return
+            
+            // 统计该项目下的缺陷数量
+            val defects = defectRepository.getDefectsByProjectUid(projectUid).first()
+            var defectCount = defects.size
+            
+            // 如果defect表中没有数据，尝试从ProjectDetail表解析历史缺陷数量
+            if (defectCount == 0) {
+                val projectDetail = projectDetailDao.getByProjectUid(projectUid)
+                if (projectDetail != null) {
+                    defectCount = countHistoryDefectsFromJson(projectDetail.rawJson)
+                    Log.d("ProjectRepository", "Using history defect count from ProjectDetail for $projectUid: $defectCount")
+                }
+            }
+            
+            // 统计该项目下所有缺陷关联的事件总数量
+            val eventCount = defects.sumOf { defect -> defect.eventCount }
+            
+            // 更新项目的计数字段
+            projectDao.updateCounters(project.projectId, defectCount, eventCount)
+            
+            Log.d("ProjectRepository", "Updated project counts for $projectUid: defects=$defectCount, events=$eventCount")
+        } catch (e: Exception) {
+            Log.e("ProjectRepository", "Failed to update project counts for $projectUid: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 函数：updateAllProjectCounts
+     * 说明：更新所有项目的defect_count和event_count字段
+     */
+    suspend fun updateAllProjectCounts() {
+        try {
+            val projects = projectDao.getAll().first()
+            projects.forEach { project ->
+                project.projectUid?.let { uid ->
+                    updateProjectCounts(uid)
+                }
+            }
+            Log.d("ProjectRepository", "Updated counts for ${projects.size} projects")
+        } catch (e: Exception) {
+            Log.e("ProjectRepository", "Failed to update all project counts: ${e.message}", e)
+        }
+    }
 // 移除过早的类结束符，使后续私有方法位于类内部
 // }
 
@@ -713,6 +748,21 @@ class ProjectRepository @Inject constructor(
 
     /** 简单清洗文件名中的非法字符。 */
     private fun sanitize(name: String): String = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+
+    /**
+     * 统计原始 JSON 中 history_defect_list 的条数。
+     * @param raw 详情 JSON 字符串
+     * @return 列表长度；若解析失败或字段不存在则返回 0
+     */
+    private fun countHistoryDefectsFromJson(raw: String): Int {
+        return try {
+            val obj = findHistoryDefectsObject(raw)
+            val arr = obj.optJSONArray("history_defect_list")
+            arr?.length() ?: 0
+        } catch (e: Exception) {
+            0
+        }
+    }
 
     /**
      * 缓存历史缺陷数据到defect表

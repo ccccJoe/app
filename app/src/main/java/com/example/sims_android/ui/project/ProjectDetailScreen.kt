@@ -68,6 +68,7 @@ fun ProjectDetailScreen(
     projectUid: String?,
     onBack: () -> Unit,
     onCreateEvent: () -> Unit,
+    onCreateEventForDefect: (String) -> Unit,
     onOpenEvent: (String) -> Unit,
     // 新增：打开项目详情页（键值信息页）的回调
     onOpenProjectInfo: () -> Unit,
@@ -92,6 +93,11 @@ fun ProjectDetailScreen(
     val defects by viewModel.historyDefects.collectAsState(emptyList())
     // 新增：收集事件列表，并在进入页面时根据 projectUid 触发加载
     val events by viewModel.events.collectAsState(emptyList())
+    // 新增：收集项目描述
+    val projectDescription by viewModel.projectDescription.collectAsState("")
+    // 新增：控制项目描述的展开/收起状态
+    var isDescriptionExpanded by remember { mutableStateOf(false) }
+    
     LaunchedEffect(projectUid) {
         viewModel.loadDefectsByProjectUid(projectUid)
         viewModel.loadEventsByProjectUid(projectUid)
@@ -104,15 +110,18 @@ fun ProjectDetailScreen(
     ) {
         OverviewCard(
             projectName = projectName,
+            projectDescription = projectDescription,
+            isDescriptionExpanded = isDescriptionExpanded,
+            onToggleDescription = { isDescriptionExpanded = !isDescriptionExpanded },
             onCreateEvent = onCreateEvent,
             // 传递：打开项目详情（键值信息）
             onOpenProjectInfo = onOpenProjectInfo
         )
 
         TabRow(selectedTabIndex = selectedTab) {
-            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("历史Defect列表") })
-            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Event列表") })
-        }
+                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Historical Defects") })
+                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Events") })
+                    }
 
         Column(
             modifier = Modifier
@@ -139,7 +148,7 @@ fun ProjectDetailScreen(
                             modifier = Modifier.height(32.dp),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                        ) { Text(if (isReorderMode) "完成排序" else "排序") }
+                        ) { Text(if (isReorderMode) "Finish Sorting" else "Sort") }
                     } else {
                         Button(
                             onClick = {
@@ -149,19 +158,27 @@ fun ProjectDetailScreen(
                             modifier = Modifier.height(32.dp),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                        ) { Text("同步") }
+                        ) { Text("Sync") }
                     }
                 }
                 if (selectedTab == 0 && isReorderMode) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = "长按行并上下拖动以调整顺序", color = Color(0xFF9E9E9E), fontSize = 11.sp)
+                    Text(text = "Long press and drag to reorder", color = Color(0xFF9E9E9E), fontSize = 11.sp)
                 }
             }
         }
 
         Box(modifier = Modifier.fillMaxSize().weight(1f)) {
             when (selectedTab) {
-                0 -> HistoryDefectList(searchText = searchText, defects = defects, onOpenDefect = { no -> onOpenDefect(no) })
+                0 -> HistoryDefectList(
+                    searchText = searchText, 
+                    defects = defects, 
+                    onOpenDefect = { no -> onOpenDefect(no) },
+                    onCreateEventForDefect = { defectNo -> 
+                        // 跳转到新建事件页面并自动关联该缺陷
+                        onCreateEventForDefect(defectNo)
+                    }
+                )
                 1 -> EventList(
                     projectName = projectName,
                     searchText = searchText,
@@ -180,12 +197,12 @@ fun ProjectDetailScreen(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "已选择 ${selectedEventIds.size} 项", color = Color(0xFF666666), fontSize = 12.sp)
+                        Text(text = "Selected ${selectedEventIds.size} items", color = Color(0xFF666666), fontSize = 12.sp)
                         Spacer(modifier = Modifier.weight(1f))
                         TextButton(onClick = {
                             isEventSelectMode = false
                             selectedEventIds.clear()
-                        }) { Text("取消") }
+                        }) { Text("Cancel") }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = {
@@ -195,7 +212,7 @@ fun ProjectDetailScreen(
                                 if (ids.isEmpty()) return@Button
                                 scope.launch {
                                     // 1) 提示：同步初始化中
-                                    Toast.makeText(context, "同步初始化中", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
                                     // 2) 展示逐项转圈：先将所有选中 ID 标记为上传中
                                     uploadingIds.clear()
                                     uploadingIds.addAll(ids)
@@ -213,11 +230,11 @@ fun ProjectDetailScreen(
                                         uploadingIds.remove(id)
                                     }
                                     // 4) 全部完成提示：同步成功
-                                    Toast.makeText(context, "同步成功", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             shape = RoundedCornerShape(8.dp)
-                        ) { Text("确认") }
+                        ) { Text("Confirm") }
                     }
                 }
             }
@@ -253,7 +270,8 @@ fun ProjectDetailScreenLegacy(
         onCreateEvent = onCreateEvent,
         onOpenEvent = onOpenEvent,
         onOpenProjectInfo = {},
-        onOpenDefect = {}
+        onOpenDefect = {},
+        onCreateEventForDefect = { _ -> onCreateEvent() }
     )
 }
 
@@ -261,6 +279,9 @@ fun ProjectDetailScreenLegacy(
 @Composable
 private fun OverviewCard(
     projectName: String,
+    projectDescription: String,
+    isDescriptionExpanded: Boolean,
+    onToggleDescription: () -> Unit,
     onCreateEvent: () -> Unit,
     // 新增：点击标题右侧箭头打开项目详情
     onOpenProjectInfo: () -> Unit
@@ -298,26 +319,39 @@ private fun OverviewCard(
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            // 描述信息：去掉背景，改为最多两行后显示省略号
-            Text(
-                text = "进行矿场建筑结构与自动化在线监测...",
-                fontSize = 12.sp,
-                color = Color(0xFF7A7A7A),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            // 底部：左侧收起，右侧右下角的 New Event 按钮（缩小为 40dp 高度）
+            // 描述信息：使用project_description，支持展开/收起
+            // 过滤null值，将null视为空内容
+            val validDescription = if (projectDescription == "null" || projectDescription.isBlank()) "" else projectDescription
+            
+            // 当有描述内容时，显示文本（根据展开状态决定是否显示）
+            if (validDescription.isNotBlank() && isDescriptionExpanded) {
+                Text(
+                    text = validDescription,
+                    fontSize = 12.sp,
+                    color = Color(0xFF7A7A7A),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            // 底部：左侧收起/展开（有描述内容时始终显示），右侧右下角的 New Event 按钮
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "收起",
-                    color = Color(0xFF4A90E2),
-                    fontSize = 12.sp,
-                    modifier = Modifier.clickable { /* TODO: collapse/expand */ }
-                )
+                // 有描述内容时始终显示展开/收起按钮
+                if (validDescription.isNotBlank()) {
+                    Text(
+                        text = if (isDescriptionExpanded) "Collapse" else "Expand",
+                        color = Color(0xFF4A90E2),
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable {
+                            onToggleDescription()
+                        }
+                    )
+                } else {
+                    // 占位空间，保持布局一致
+                    Spacer(modifier = Modifier.width(0.dp))
+                }
                 Spacer(modifier = Modifier.weight(1f))
                 Button(
                     onClick = onCreateEvent,
@@ -505,7 +539,7 @@ private fun EventCard(
                 Text(text = item.date, fontSize = 11.sp, color = Color(0xFF9E9E9E))
                 Spacer(modifier = Modifier.weight(1f))
                 if (!selectionMode) {
-                    Text(text = "详情 >", color = Color(0xFF4A90E2), fontSize = 12.sp)
+                    Text(text = "Details >", color = Color(0xFF4A90E2), fontSize = 12.sp)
                 }
             }
         }
@@ -521,7 +555,9 @@ private fun HistoryDefectList(
     searchText: String,
     defects: List<HistoryDefectItem>,
     // 新增：点击缺陷项时回调，传递缺陷编号 no
-    onOpenDefect: (String) -> Unit
+    onOpenDefect: (String) -> Unit,
+    // 新增：点击新增事件时回调，传递缺陷编号 no
+    onCreateEventForDefect: (String) -> Unit
 ) {
     val filtered = remember(searchText, defects) {
         val keyword = searchText.trim()
@@ -535,15 +571,19 @@ private fun HistoryDefectList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 6.dp),
-                onClick = { onOpenDefect(item.no) }
+                onClick = { onOpenDefect(item.no) },
+                onCreateEvent = { onCreateEventForDefect(item.no) }
             )
         }
     }
 }
 
 /**
- * 历史缺陷卡片：展示编号与风险评级，并以与新建 Event 页面一致的风格展示图片缩略图（不提供删除）。
- * UI 行为：点击任一缩略图，打开全屏大图对话框支持双指缩放和拖拽。
+ * 历史缺陷卡片：
+ * - 显示缺陷编号、风险等级标签、照片缩略图；
+ * - 显示关联事件数量和新增链接；
+ * - 支持点击跳转详情页；
+ * - 支持点击照片预览大图。
  */
 @Composable
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -551,7 +591,9 @@ private fun HistoryDefectCard(
     item: HistoryDefectItem,
     modifier: Modifier = Modifier,
     // 新增：点击回调
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // 新增：点击新增事件回调
+    onCreateEvent: () -> Unit
 ) {
     // State: 当前被预览的大图路径
     var largePhotoPath by remember { mutableStateOf<String?>(null) }
@@ -569,30 +611,52 @@ private fun HistoryDefectCard(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            // 调整标题布局：No 与 Tag 同行显示，No 可换行，Tag 跟随换行后最后一行末尾显示
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                // 使用 FlowRow 让 Tag 跟随 No 的换行末尾显示
-                androidx.compose.foundation.layout.FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = "No.${item.no}",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF222222)
-                    )
-                    if (item.riskRating.isNotBlank()) {
-                        RiskTag(item.riskRating)
-                    }
+            // 调整标题布局：No 与 Tag 紧挨着显示，作为一条数据，若 No 换行则 Tag 跟随换行
+            androidx.compose.foundation.layout.FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp), // 减小间距使其更紧密
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "No.${item.no}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF222222)
+                )
+                if (item.riskRating.isNotBlank()) {
+                    RiskTag(item.riskRating)
                 }
             }
+            
             if (item.images.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 ThumbnailRow(
                     images = item.images,
                     onPhotoClick = { path -> largePhotoPath = path }
+                )
+            }
+            
+            // 关联事件数量和新增链接（调整到最右侧显示）
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Spacer(modifier = Modifier.weight(1f)) // 推送到右侧
+                Text(
+                    text = "Related Events: ${item.eventCount}",
+                    fontSize = 12.sp,
+                    color = Color(0xFF666666)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Add New",
+                    fontSize = 12.sp,
+                    color = Color(0xFF2196F3),
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.clickable { 
+                        onCreateEvent()
+                    }
                 )
             }
         }

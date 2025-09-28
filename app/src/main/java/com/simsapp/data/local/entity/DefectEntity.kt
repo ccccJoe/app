@@ -45,6 +45,8 @@ data class DefectEntity(
     @ColumnInfo(name = "risk_rating") val riskRating: String,
     /** Current status (e.g., OPEN, IN_PROGRESS, CLOSED). */
     @ColumnInfo(name = "status") val status: String = "OPEN",
+    /** Defect type (e.g., LOCALLY_AFFECT_STRUCTURAL_PERFORMANCE, GLOBAL_AFFECT_STRUCTURAL_PERFORMANCE). */
+    @ColumnInfo(name = "type", defaultValue = "") val type: String = "",
     /** Image file paths as JSON string list via TypeConverters. */
     @ColumnInfo(name = "images") val images: List<String> = emptyList(),
     /** Count of related events for quick listing. */

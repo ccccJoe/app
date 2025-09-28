@@ -25,11 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.simsapp.ui.common.PieChart
 import com.simsapp.ui.common.BarChart
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
-import java.time.Instant
-import java.time.ZoneId
+import java.text.SimpleDateFormat
+import java.util.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.simsapp.data.local.entity.ProjectEntity
 import androidx.compose.runtime.LaunchedEffect
@@ -73,6 +70,9 @@ fun DashboardScreen(
 
     // 新增：订阅历史缺陷数量（projectUid -> count）
     val historyCounts by viewModel.historyDefectCounts.collectAsState()
+    
+    // 新增：订阅事件数量（projectUid -> count）
+    val eventCounts by viewModel.eventCounts.collectAsState()
 
     // 消费一次性事件：只在事件到达时展示提示，不会在返回页面时重复触发
     LaunchedEffect(Unit) {
@@ -85,12 +85,13 @@ fun DashboardScreen(
         }
     }
 
-    // 将实体映射为 UI 所需数据结构（包含历史缺陷数量）
-    val projectList = remember(projects, historyCounts) {
+    // 将实体映射为 UI 所需数据结构（包含历史缺陷数量和事件数量）
+    val projectList = remember(projects, historyCounts, eventCounts) {
         projects.map { entity ->
             val card = entity.toCard()
-            val count = historyCounts[card.projectUid ?: ""] ?: 0
-            card.copy(defectCount = count)
+            val defectCount = historyCounts[card.projectUid ?: ""] ?: 0
+            val eventCount = eventCounts[card.projectUid ?: ""] ?: 0
+            card.copy(defectCount = defectCount, eventCount = eventCount)
         }.sortedWith(compareBy<ProjectCardData> {
             when (normalizeStatus(it.status)) {
                 "CREATING", "COLLECTING" -> 0
@@ -446,8 +447,9 @@ private fun ProjectEntity.toCard(): ProjectCardData = ProjectCardData(
  * @return 按本地时区格式化后的时间字符串，格式为 yyyy-MM-dd HH:mm
  */
 private fun formatEpochMillisToDateString(epochMillis: Long): String {
-    val localDateTime = Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
-    return localDateTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    val date = Date(epochMillis)
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+    return formatter.format(date)
 }
 
 /**
@@ -463,9 +465,11 @@ private fun getStatusColor(status: String, endDate: String): Color {
         "CREATING" -> Color(0xFFF5A623) // 橙黄
         else -> {
             try {
-                val end = LocalDate.parse(endDate, DateTimeFormatter.ofPattern("yyyy-MM-dd"))
-                val today = LocalDate.now()
-                val daysUntilEnd = ChronoUnit.DAYS.between(today, end)
+                val endDateParsed = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).parse(endDate)
+                val today = Date()
+                val daysUntilEnd = if (endDateParsed != null) {
+                    ((endDateParsed.time - today.time) / (1000 * 60 * 60 * 24)).toInt()
+                } else 0
                 when {
                     daysUntilEnd > 5 -> Color(0xFF4A90E2)
                     daysUntilEnd in 3..5 -> Color(0xFFF5A623)
@@ -583,7 +587,7 @@ private fun ProjectCard(project: ProjectCardData, onClick: () -> Unit = {}) {
                     color = Color(0xFF666666)
                 )
                 Text(
-                    text = "Events Quantity: 0",
+                    text = "Events Quantity: ${project.eventCount}",
                     fontSize = 12.sp,
                     color = Color(0xFF666666)
                 )

@@ -11,7 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.simsapp.ui.dashboard.DashboardScreen
 import com.simsapp.ui.dashboard.ProjectCardData
-import com.simsapp.ui.event.EventFormScreen
+import com.example.sims_android.ui.event.EventFormScreen
 import com.simsapp.ui.project.ProjectDetailScreen
 import com.simsapp.ui.theme.SIMSAndroidTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -62,15 +62,17 @@ class MainActivity : ComponentActivity() {
                 return "project?projectName=$name&projectUid=$uid"
             }
         }
-        /** Event detail/form page with optional projectName and eventId as query */
-        data object Event : AppDestination("event?projectName={projectName}&eventId={eventId}") {
+        /** Event detail/form page with optional projectName, eventId and defectId as query */
+        data object Event : AppDestination("event?projectName={projectName}&eventId={eventId}&defectId={defectId}") {
             const val ARG_PROJECT_NAME = "projectName"
             const val ARG_EVENT_ID = "eventId"
-            /** Build route; both params are optional */
-            fun route(projectName: String? = null, eventId: String? = null): String {
+            const val ARG_DEFECT_ID = "defectId"
+            /** Build route; all params are optional */
+            fun route(projectName: String? = null, eventId: String? = null, defectId: String? = null): String {
                 val qs = buildList {
                     if (!projectName.isNullOrBlank()) add("projectName=${Uri.encode(projectName)}")
                     if (!eventId.isNullOrBlank()) add("eventId=${Uri.encode(eventId)}")
+                    if (!defectId.isNullOrBlank()) add("defectId=${Uri.encode(defectId)}")
                 }.joinToString("&")
                 return if (qs.isBlank()) "event" else "event?$qs"
             }
@@ -182,6 +184,9 @@ class MainActivity : ComponentActivity() {
                             onCreateEvent = {
                                 navController.navigate(AppDestination.Event.route(projectName))
                             },
+                            onCreateEventForDefect = { defectNo ->
+                                navController.navigate(AppDestination.Event.route(projectName, defectId = defectNo))
+                            },
                             onOpenEvent = { eventId ->
                                 navController.navigate(AppDestination.Event.route(projectName, eventId))
                             },
@@ -194,7 +199,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // 3) Event page - optional query arg: projectName & eventId
+                    // 3) Event page - optional query arg: projectName, eventId & defectId
                     composable(
                         route = AppDestination.Event.route,
                         arguments = listOf(
@@ -205,6 +210,10 @@ class MainActivity : ComponentActivity() {
                             navArgument(AppDestination.Event.ARG_EVENT_ID) {
                                 type = NavType.StringType
                                 defaultValue = ""
+                            },
+                            navArgument(AppDestination.Event.ARG_DEFECT_ID) {
+                                type = NavType.StringType
+                                defaultValue = ""
                             }
                         )
                     ) { backStackEntry ->
@@ -212,6 +221,8 @@ class MainActivity : ComponentActivity() {
                         val projectName = if (encoded.isBlank()) "" else Uri.decode(encoded)
                         val eventIdEncoded = backStackEntry.arguments?.getString(AppDestination.Event.ARG_EVENT_ID).orEmpty()
                         val eventId = if (eventIdEncoded.isBlank()) "" else Uri.decode(eventIdEncoded)
+                        val defectIdEncoded = backStackEntry.arguments?.getString(AppDestination.Event.ARG_DEFECT_ID).orEmpty()
+                        val defectId = if (defectIdEncoded.isBlank()) "" else Uri.decode(defectIdEncoded)
                         // 缓存从文件选择器返回的选项
                         var selectedStorage by remember { mutableStateOf(listOf<String>()) }
                         // 观察从 StoragePicker 返回的结果
@@ -231,6 +242,7 @@ class MainActivity : ComponentActivity() {
                         EventFormScreen(
                             projectName = projectName,
                             eventId = eventId,
+                            defectId = defectId,
                             onBack = { navController.popBackStack() },
                             onOpenStorage = {
                                 navController.navigate(AppDestination.StoragePicker.route(projectName))

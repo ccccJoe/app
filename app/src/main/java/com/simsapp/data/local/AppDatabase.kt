@@ -26,7 +26,7 @@ import com.simsapp.data.local.entity.ProjectDetailEntity
  */
 @Database(
     entities = [ProjectEntity::class, DefectEntity::class, EventEntity::class, AssetEntity::class, ProjectDetailEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

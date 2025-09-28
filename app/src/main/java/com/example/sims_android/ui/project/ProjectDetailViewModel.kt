@@ -28,7 +28,8 @@ import android.util.Log
 data class HistoryDefectItem(
     val no: String,
     val riskRating: String,
-    val images: List<String> = emptyList()
+    val images: List<String> = emptyList(),
+    val eventCount: Int = 0
 )
 
 /**
@@ -77,6 +78,14 @@ class ProjectDetailViewModel @Inject constructor(
     /** Public read-only flow for UI consumption. */
     val events: StateFlow<List<EventItem>> = _events
 
+    // ---------------- Project Description State ----------------
+    /**
+     * Backing state for project description, parsed from project_attr.project_description.
+     */
+    private val _projectDescription = MutableStateFlow<String>("")
+    /** Public read-only flow for UI consumption. */
+    val projectDescription: StateFlow<String> = _projectDescription
+
     /**
      * 主动加载一次：按 projectUid 拉取 Room 中的 ProjectDetail.rawJson 并解析，再读取本地图片目录。
      */
@@ -86,6 +95,9 @@ class ProjectDetailViewModel @Inject constructor(
             val result = runCatching {
                 val detail = projectDetailDao.getByProjectUid(projectUid)
                 val raw = detail?.rawJson.orEmpty()
+                // Parse project description
+                val description = parseProjectDescription(raw)
+                _projectDescription.value = description
                 parseHistoryDefects(projectUid, raw)
             }.getOrElse { emptyList() }
             _historyDefects.value = result
@@ -136,7 +148,7 @@ class ProjectDetailViewModel @Inject constructor(
      * @param projectUid The project uid used to locate cached images directory.
      * @param raw The raw JSON string from ProjectDetailEntity.rawJson.
      */
-    private fun parseHistoryDefects(projectUid: String, raw: String): List<HistoryDefectItem> {
+    private suspend fun parseHistoryDefects(projectUid: String, raw: String): List<HistoryDefectItem> {
         if (raw.isBlank()) return emptyList()
         return try {
             val obj = findDefectsObject(raw)
@@ -155,7 +167,12 @@ class ProjectDetailViewModel @Inject constructor(
                         ?.take(3)
                         ?: emptyList()
                 } else emptyList()
-                out += HistoryDefectItem(no = no, riskRating = risk, images = images)
+                
+                // 从数据库获取该缺陷的event_count
+                val defectEntity = defectRepository.getDefectByProjectUidAndDefectNo(projectUid, no)
+                val eventCount = defectEntity?.eventCount ?: 0
+                
+                out += HistoryDefectItem(no = no, riskRating = risk, images = images, eventCount = eventCount)
             }
             out
         } catch (_: Exception) {
@@ -361,11 +378,29 @@ class ProjectDetailViewModel @Inject constructor(
     }
 
     /**
+     * Parse project description from raw JSON.
+     * @param raw JSON string from ProjectDetailEntity.rawJson
+     * @return Project description string, empty if not found
+     */
+    private fun parseProjectDescription(raw: String): String {
+        if (raw.isBlank()) return ""
+        return try {
+            val data = parseRootObject(raw)
+            val projectAttr = data.optJSONObject("project_attr")
+            projectAttr?.optString("project_description", "") ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    /**
      * 订阅指定 projectUid 的 ProjectDetail 记录变化，当 lastFetchedAt 更新或 rawJson 变化时，自动重新解析并刷新图片列表与详情分组。
      * 同时将historyDefectList缓存到本地defect数据库。
+     * 同时订阅DefectEntity表的变化，确保event_count更新时UI能及时刷新。
      */
     private fun observeDetailAndRefresh(projectUid: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            // 订阅ProjectDetail表的变化
             projectDetailDao.observeByProjectUid(projectUid).collectLatest { detail ->
                 if (detail == null) return@collectLatest
                 val items = parseHistoryDefects(projectUid, detail.rawJson)
@@ -373,9 +408,24 @@ class ProjectDetailViewModel @Inject constructor(
                 // 新增：解析详情分组
                 val groups = parseDetailGroups(detail.rawJson)
                 _detailGroups.value = groups
+                // 新增：解析项目描述
+                val description = parseProjectDescription(detail.rawJson)
+                _projectDescription.value = description
                 
                 // 缓存historyDefectList到本地defect数据库
                 cacheHistoryDefectsToLocalDb(projectUid, detail.projectId, detail.rawJson)
+            }
+        }
+        
+        // 同时订阅DefectEntity表的变化，确保event_count更新时UI能及时刷新
+        viewModelScope.launch(Dispatchers.IO) {
+            defectRepository.getDefectsByProjectUid(projectUid).collectLatest { defects ->
+                // 当DefectEntity表有变化时，重新解析historyDefects以获取最新的event_count
+                val detail = projectDetailDao.getByProjectUid(projectUid)
+                if (detail != null) {
+                    val items = parseHistoryDefects(projectUid, detail.rawJson)
+                    _historyDefects.value = items
+                }
             }
         }
     }
@@ -399,6 +449,7 @@ class ProjectDetailViewModel @Inject constructor(
                 val no = item.optString("no").takeIf { it.isNotBlank() } ?: continue
                 val risk = item.optString("risk_rating").takeIf { it.isNotBlank() } ?: ""
                 val status = item.optString("status", "OPEN")
+                val type = item.optString("type", "")
                 
                 // 从本地缓存目录读取图片缩略图路径
                 val dir = File(appContext.filesDir, "history_defects/${projectUid}/${sanitize(no)}")
@@ -416,6 +467,7 @@ class ProjectDetailViewModel @Inject constructor(
                 val defect = existingDefect?.copy(
                     riskRating = risk,
                     status = status,
+                    type = type,
                     images = images
                 ) ?: DefectEntity(
                     projectId = projectId,
@@ -423,6 +475,7 @@ class ProjectDetailViewModel @Inject constructor(
                     defectNo = no,
                     riskRating = risk,
                     status = status,
+                    type = type,
                     images = images
                 )
                 

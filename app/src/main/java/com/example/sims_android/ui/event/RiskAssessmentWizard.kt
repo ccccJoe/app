@@ -11,7 +11,7 @@
  * - Keep UI texts in Chinese based on product requirement screenshots.
  * - The wizard is self-contained and returns a simple RiskAssessmentResult.
  */
-package com.simsapp.ui.event
+package com.example.sims_android.ui.event
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
