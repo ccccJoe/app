@@ -7,6 +7,7 @@ package com.simsapp.ui.dashboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,7 +32,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.simsapp.data.local.entity.ProjectEntity
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.flow.collectLatest
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 
 /**
  * 首页仪表盘主界面
@@ -74,6 +76,9 @@ fun DashboardScreen(
     // 新增：订阅事件数量（projectUid -> count）
     val eventCounts by viewModel.eventCounts.collectAsState()
 
+    // 移除首页内部的loading状态订阅，因为已经在MainActivity中处理
+    // val dashboardLoadingState by viewModel.dashboardLoadingState.collectAsState()
+
     // 消费一次性事件：只在事件到达时展示提示，不会在返回页面时重复触发
     LaunchedEffect(Unit) {
         viewModel.uiEvents.collectLatest { event ->
@@ -85,13 +90,26 @@ fun DashboardScreen(
         }
     }
 
+    // 收集项目详情数据，用于获取inspection_end_at时间戳
+    val projectDetails by viewModel.projectDetails.collectAsState(emptyMap())
+    
     // 将实体映射为 UI 所需数据结构（包含历史缺陷数量和事件数量）
-    val projectList = remember(projects, historyCounts, eventCounts) {
+    val projectList = remember(projects, historyCounts, eventCounts, projectDetails) {
         projects.map { entity ->
             val card = entity.toCard()
             val defectCount = historyCounts[card.projectUid ?: ""] ?: 0
             val eventCount = eventCounts[card.projectUid ?: ""] ?: 0
-            card.copy(defectCount = defectCount, eventCount = eventCount)
+            
+            // 从缓存的项目详情中获取inspection_end_at时间戳
+            val inspectionEndAt = projectDetails[card.projectUid ?: ""]?.let { detail ->
+                parseInspectionEndAt(detail.rawJson)
+            }
+            
+            card.copy(
+                defectCount = defectCount, 
+                eventCount = eventCount,
+                inspectionEndAt = inspectionEndAt
+            )
         }.sortedWith(compareBy<ProjectCardData> {
             when (normalizeStatus(it.status)) {
                 "CREATING", "COLLECTING" -> 0
@@ -111,18 +129,16 @@ fun DashboardScreen(
         "Finished" to finishedCount.toFloat()
     )
 
-    // 柱状图示例数据（保留占位）
-    val barChartData = listOf(
-        Triple("松桃矿井", "Historical Defects", 5f),
-        Triple("松桃矿井", "Linked Defects", 1f),
-        Triple("松桃矿井", "Unlinked Defects", 1f),
-        Triple("白云石矿", "Historical Defects", 5f),
-        Triple("白云石矿", "Linked Defects", 1.5f),
-        Triple("白云石矿", "Unlinked Defects", 0.5f),
-        Triple("伊明煤矿", "Historical Defects", 5f),
-        Triple("伊明煤矿", "Linked Defects", 1.2f),
-        Triple("伊明煤矿", "Unlinked Defects", 0.8f)
-    )
+    // 柱状图数据：从ViewModel获取基于COLLECTING项目的统计数据
+    val barChartData by viewModel.barChartData.collectAsState()
+    
+    // 调试：打印柱状图数据
+    LaunchedEffect(barChartData) {
+        android.util.Log.d("DashboardScreen", "Received barChartData size: ${barChartData.size}")
+        barChartData.forEach { triple ->
+            android.util.Log.d("DashboardScreen", "Data: ${triple.first} - ${triple.second} = ${triple.third}")
+        }
+    }
 
     // 新增：同步确认弹窗的显隐状态
     var showSyncConfirm by remember { mutableStateOf(false) }
@@ -131,12 +147,14 @@ fun DashboardScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFF5F5F5))
+            .background(Color.White)
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(0.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)
+            // 移除滑动控制，因为loading已经在MainActivity中处理
+            // userScrollEnabled = dashboardLoadingState.isDataReady
         ) {
             // 顶部Dashboard标题和图表卡片
             item {
@@ -179,27 +197,23 @@ fun DashboardScreen(
         if (syncState.isLoading) {
             FullscreenLoadingOverlay(message = "Sync in progress, please wait…")
         }
+        
+        // 移除首页数据加载中的Loading覆盖层，因为已经在MainActivity中处理
+        // if (dashboardLoadingState.isLoading) {
+        //     FullscreenLoadingOverlay(message = "Loading dashboard data…")
+        // }
+        
         // 新增：同步确认弹窗
         if (showSyncConfirm) {
-            AlertDialog(
-                onDismissRequest = { showSyncConfirm = false },
-                title = { Text(text = "Confirm Sync") },
-                text = { Text(text = "The synchronization time is relatively long, please ensure a good network environment") },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showSyncConfirm = false
-                        // 先触发 ViewModel 同步，再保留兼容回调
-                        viewModel.syncProjects()
-                        onSyncClick()
-                    }) {
-                        Text("Confirm")
-                    }
+            SyncConfirmDialog(
+                onDismiss = { showSyncConfirm = false },
+                onConfirm = {
+                    showSyncConfirm = false
+                    // 先触发 ViewModel 同步，再保留兼容回调
+                    viewModel.syncProjects()
+                    onSyncClick()
                 },
-                dismissButton = {
-                    TextButton(onClick = { showSyncConfirm = false }) {
-                        Text("Cancel")
-                    }
-                }
+                viewModel = viewModel
             )
         }
         // Snackbar反馈：仅保留清理状态；同步成功/失败通过一次性事件处理
@@ -281,7 +295,7 @@ private fun StatisticsSection(
         ) {
             // 标题
             Text(
-                text = "Project distribution in the past 90 days",
+                text = "Project allocation in the past 90 days",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color(0xFF333333),
@@ -318,7 +332,7 @@ private fun StatisticsSection(
                         data = barChartData,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(120.dp)
+                            .height(120.dp)  // 恢复原始高度，因为已移除图例
                             .clickable {
                                 // TODO: 点击柱状图查看详细列表
                             }
@@ -415,6 +429,7 @@ private fun ActionButtonsSection(
  * - endDate 项目更新时间（格式化后的字符串）
  * - status 项目状态（CREATING/COLLECTING/FINISHED）
  * - projectUid 项目唯一标识（用于查询 ProjectDetail）
+ * - inspectionEndAt 检查结束时间戳（毫秒，用于背景颜色计算）
  */
 data class ProjectCardData(
     val name: String,
@@ -422,7 +437,8 @@ data class ProjectCardData(
     val eventCount: Int,
     val endDate: String,
     val status: String,
-    val projectUid: String?
+    val projectUid: String?,
+    val inspectionEndAt: Long? = null
 )
 
 /**
@@ -440,6 +456,45 @@ private fun ProjectEntity.toCard(): ProjectCardData = ProjectCardData(
     status = this.status,
     projectUid = this.projectUid // 新增映射
 )
+
+/**
+ * 函数：parseInspectionEndAt
+ * 说明：从项目详情的rawJson中解析inspection_end_at时间戳
+ * 参数：rawJson - 项目详情的原始JSON字符串
+ * 返回：inspection_end_at的时间戳（毫秒），如果不存在则返回null
+ */
+private fun parseInspectionEndAt(rawJson: String): Long? {
+    return try {
+        val jsonObject = JSONObject(rawJson)
+        
+        // 尝试从不同的可能位置获取inspection_end_at
+        val inspectionEndAt = when {
+            // 直接在根级别
+            jsonObject.has("inspection_end_at") -> jsonObject.optLong("inspection_end_at", 0)
+            // 在project_attr中
+            jsonObject.has("project_attr") -> {
+                val projectAttr = jsonObject.getJSONObject("project_attr")
+                projectAttr.optLong("inspection_end_at", 0)
+            }
+            // 在data.project_attr中
+            jsonObject.has("data") -> {
+                val data = jsonObject.getJSONObject("data")
+                if (data.has("project_attr")) {
+                    val projectAttr = data.getJSONObject("project_attr")
+                    projectAttr.optLong("inspection_end_at", 0)
+                } else {
+                    0L
+                }
+            }
+            else -> 0L
+        }
+        
+        if (inspectionEndAt > 0) inspectionEndAt else null
+    } catch (e: Exception) {
+        android.util.Log.w("DashboardScreen", "Failed to parse inspection_end_at from rawJson: ${e.message}")
+        null
+    }
+}
 
 /**
  * 工具方法：将 epoch 毫秒时间戳格式化为字符串
@@ -484,15 +539,39 @@ private fun getStatusColor(status: String, endDate: String): Color {
 }
 
 /**
- * 根据状态返回卡片背景色（浅色）
+ * 函数：getCardBackgroundColor
+ * 说明：根据项目状态和inspection_end_at时间戳返回卡片背景颜色，使用非常淡的颜色效果
+ * 逻辑：
+ * 1. 如果项目状态是finished，返回非常淡的绿色
+ * 2. 根据inspection_end_at与当前时间的差值：
+ *    - >5天：非常淡的蓝色（3%透明度）
+ *    - 2-5天：非常淡的黄色（6%透明度）
+ *    - <2天：非常淡的红色（8%透明度）
+ *    - 已过期：稍微明显的红色（12%透明度）
+ * 3. 默认：白色
  */
-private fun getCardBackgroundColor(status: String): Color {
-    return when (normalizeStatus(status)) {
-        "COLLECTING" -> Color(0xFFF2F7FF) // 很浅的蓝
-        "CREATING" -> Color(0xFFFFFBF2) // 很浅的橙黄
-        "FINISHED" -> Color.White
-        else -> Color.White
+private fun getCardBackgroundColor(project: ProjectCardData): Color {
+    // 1. 如果项目状态是finished，返回更明显的淡绿色
+    if (normalizeStatus(project.status) == "FINISHED") {
+        return Color(0x30E8F5E8) // 更明显的淡绿色，约18%透明度，与淡红色效果相当
     }
+    
+    // 2. 根据inspection_end_at与当前时间的差值计算颜色
+    val inspectionEndAt = project.inspectionEndAt
+    if (inspectionEndAt != null) {
+        val currentTime = System.currentTimeMillis()
+        val daysDiff = (inspectionEndAt - currentTime) / (24 * 60 * 60 * 1000) // 转换为天数
+        
+        return when {
+            daysDiff > 5 -> Color(0x08E3F2FD) // 非常淡的蓝色 - >5天，3%透明度
+            daysDiff >= 2 -> Color(0x10FFF8E1) // 非常淡的黄色 - 2-5天，6%透明度
+            daysDiff >= 0 -> Color(0x15FFEBEE) // 非常淡的红色 - <2天但未过期，8%透明度
+            else -> Color(0x20FFCDD2) // 稍微明显的红色 - 已过期，12%透明度
+        }
+    }
+    
+    // 3. 默认白色
+    return Color.White
 }
 
 /**
@@ -559,8 +638,8 @@ private fun ProjectCard(project: ProjectCardData, onClick: () -> Unit = {}) {
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .clickable { onClick() },
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = getCardBackgroundColor(project.status)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        colors = CardDefaults.cardColors(containerColor = getCardBackgroundColor(project)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -641,4 +720,98 @@ private fun FullscreenLoadingOverlay(message: String = "Syncing…") {
             }
         }
     }
+}
+
+/**
+ * 同步确认弹窗组件
+ * 包含网络状态检查和用户确认功能
+ */
+@Composable
+private fun SyncConfirmDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    viewModel: DashboardViewModel
+) {
+    // 获取网络状态信息
+    val networkUtils = viewModel.networkUtils
+    val isNetworkAvailable = remember { networkUtils.isNetworkAvailable() }
+    val networkQuality = remember { networkUtils.getNetworkQuality() }
+    val networkMessage = remember { networkUtils.getNetworkStatusMessage() }
+    val isNetworkSuitable = remember { networkUtils.isNetworkSuitableForSync() }
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { 
+            Text(text = "Confirm Sync") 
+        },
+        text = { 
+            Column {
+                Text(text = "The synchronization time is relatively long, please ensure a good network environment.")
+                
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // 网络状态显示
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 网络状态指示器
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(
+                                color = when {
+                                    !isNetworkAvailable -> Color.Red
+                                    !isNetworkSuitable -> Color(0xFFFF9800) // Orange
+                                    else -> Color(0xFF4CAF50)
+                                },
+                                shape = androidx.compose.foundation.shape.CircleShape
+                            )
+                    )
+                    
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
+                    Text(
+                        text = networkMessage,
+                        fontSize = 12.sp,
+                        color = when {
+                            !isNetworkAvailable -> Color.Red
+                            !isNetworkSuitable -> Color(0xFFFF9800) // Orange
+                            else -> Color(0xFF4CAF50)
+                        }
+                    )
+                }
+                
+                // 网络不佳时的警告提示
+                if (!isNetworkAvailable || !isNetworkSuitable) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (!isNetworkAvailable) {
+                            "⚠️ No network connection detected. Sync will fail without network."
+                        } else {
+                            "⚠️ Poor network connection may cause sync to fail or take longer."
+                        },
+                        fontSize = 11.sp,
+                        color = Color.Red,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = isNetworkAvailable // 只有在有网络连接时才允许确认
+            ) {
+                Text(
+                    text = "Confirm",
+                    color = if (isNetworkAvailable) Color(0xFF4A90E2) else Color.Gray
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }

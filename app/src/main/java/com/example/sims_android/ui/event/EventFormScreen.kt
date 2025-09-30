@@ -3,6 +3,7 @@ package com.example.sims_android.ui.event
 import android.Manifest
 import android.media.MediaRecorder
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -57,6 +58,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.simsapp.data.local.entity.DefectEntity
 import com.simsapp.data.local.entity.EventEntity
 import com.example.sims_android.ui.event.EventFormViewModel
+import com.simsapp.ui.common.RiskTagColors
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
@@ -85,6 +87,12 @@ import androidx.compose.foundation.Canvas
 // 新增：图片预览和异步处理相关 import
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+// 新增：左滑删除功能相关 import
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 
 import kotlin.math.PI
 import kotlin.math.sin
@@ -110,7 +118,8 @@ import android.util.Log
      defectId: String = "",
      onBack: () -> Unit,
      onOpenStorage: () -> Unit,
-     selectedStorage: List<String> = emptyList()
+     selectedStorage: List<String> = emptyList(),
+     onOpenDefect: ((DefectEntity) -> Unit)? = null
  ) {
      // 通过 Hilt 获取 ViewModel，提供风险矩阵加载能力
      val viewModel: EventFormViewModel = hiltViewModel()
@@ -594,6 +603,29 @@ import android.util.Log
     }
 
     val title = remember(projectName) { if (projectName.isNotBlank()) "New Event - $projectName" else "New Event" }
+    
+    // 新增：离开页面确认弹窗状态
+    var showExitConfirmDialog by remember { mutableStateOf(false) }
+    
+    // 新增：检查是否需要显示离开确认弹窗的函数
+    val shouldShowExitConfirm = {
+        // 检查是否没有关联任何defect且有其他内容
+        selectedDefects.isEmpty() && (location.isNotBlank() || description.isNotBlank() || photoFiles.isNotEmpty() || audioFiles.isNotEmpty() || riskResult != null)
+    }
+    
+    // 新增：处理返回按钮点击的函数
+    val handleBackPress = {
+        if (shouldShowExitConfirm()) {
+            showExitConfirmDialog = true
+        } else {
+            onBack()
+        }
+    }
+
+    // 添加BackHandler来处理系统返回按钮
+    BackHandler {
+        handleBackPress()
+    }
 
     Scaffold { paddingValues ->
         Box(
@@ -863,35 +895,8 @@ import android.util.Log
                                 selectedDefects.forEach { defect ->
                                     DefectInfoCard(
                                         defect = defect,
-                                        onRemove = { 
-                                            selectedDefects.remove(defect)
-                                            // 立即触发自动保存，确保defect关联变化被保存并更新event_count
-                                            scope.launch {
-                                                try {
-                                                    val isEditMode = eventId.isNotBlank()
-                                                    val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
-                                                    
-                                                    val result = viewModel.saveEventToRoom(
-                                                        projectName = projectName,
-                                                        location = location,
-                                                        description = description,
-                                                        currentEventId = currentEventId,
-                                                        isEditMode = isEditMode,
-                                                        riskResult = riskResult,
-                                                        photoFiles = photoFiles,
-                                                        audioFiles = audioFiles,
-                                                        selectedDefects = selectedDefects.toList()
-                                                    )
-                                                    
-                                                    result.onSuccess { savedEventId ->
-                                                        Log.d("EventFormScreen", "Auto-saved event after defect removal: projectName=$projectName, isEditMode=$isEditMode, savedEventId=$savedEventId, defectCount=${selectedDefects.size}")
-                                                    }.onFailure { e ->
-                                                        Log.e("EventFormScreen", "Failed to auto-save event after defect removal: ${e.message}", e)
-                                                    }
-                                                } catch (e: Exception) {
-                                                    Log.e("EventFormScreen", "Exception during auto-save after defect removal: ${e.message}", e)
-                                                }
-                                            }
+                                        onDefectClick = { defectEntity ->
+                                            onOpenDefect?.invoke(defectEntity)
                                         }
                                     )
                                 }
@@ -1057,18 +1062,74 @@ import android.util.Log
             }
         )
     }
+    
+    // 新增：离开页面确认弹窗
+    if (showExitConfirmDialog) {
+        ExitConfirmationDialog(
+            onConfirm = {
+                showExitConfirmDialog = false
+                onBack()
+            },
+            onDismiss = {
+                showExitConfirmDialog = false
+            }
+        )
+    }
+}
+
+/**
+ * 离开页面确认弹窗组件
+ * 当用户在没有关联defect的情况下尝试离开页面时显示
+ * 提供全英文的提示信息
+ */
+@Composable
+private fun ExitConfirmationDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "No Associated Defects",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Text(
+                text = "This event has no associated defects. Are you sure you want to leave this page?",
+                fontSize = 14.sp
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = "Yes, Leave",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(
+                    text = "Cancel",
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    )
 }
 
 /**
  * 缺陷信息卡片组件
- * 参照历史缺陷列表样式，显示已关联的缺陷信息，包括缺陷编号、风险等级标签、图片缩略图和移除按钮
- * 添加淡背景颜色以提升视觉效果，支持图片预览功能
+ * 参照历史缺陷列表样式，显示已关联的缺陷信息，包括缺陷编号、风险等级标签、图片缩略图
+ * 支持点击跳转到缺陷详情页面，支持图片预览功能
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun DefectInfoCard(
     defect: DefectEntity,
-    onRemove: () -> Unit,
+    onDefectClick: (DefectEntity) -> Unit,
     modifier: Modifier = Modifier
 ) {
     // State: 当前被预览的大图路径
@@ -1093,78 +1154,50 @@ private fun DefectInfoCard(
         } else emptyList()
     }
     
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)), // 淡灰色背景
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Column(
+    // 主要内容卡片
+    Box(modifier = modifier.fillMaxWidth()) {
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp)
+                .clickable { onDefectClick(defect) },
+            shape = RoundedCornerShape(10.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)), // 淡灰色背景
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
         ) {
-            // 标题布局：No 与 Tag 同行显示，参照历史缺陷列表样式
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                androidx.compose.foundation.layout.FlowRow(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp)
+            ) {
+                // 标题布局：缺陷编号和风险等级标签
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Defect No 文本
+                    // 缺陷编号文本
                     Text(
                         text = "No.${defect.defectNo}",
                         fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color(0xFF37474F)
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF222222),
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     
-                    // Risk Rating 标签
-                    Box(
-                        modifier = Modifier
-                            .background(
-                                color = when (defect.riskRating.uppercase()) {
-                                    "P0" -> Color(0xFFB71C1C) // 深红色
-                                    "P1" -> Color(0xFFD32F2F) // 红色
-                                    "P2" -> Color(0xFFFF9800) // 橙色
-                                    "P3" -> Color(0xFFFFC107) // 黄色
-                                    "P4" -> Color(0xFF4CAF50) // 绿色
-                                    else -> Color(0xFF9E9E9E) // 灰色
-                                },
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = defect.riskRating,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                    // 风险等级标签
+                    if (defect.riskRating.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        RiskLevelTag(riskLevel = defect.riskRating)
                     }
                 }
                 
-                // 移除按钮
-                IconButton(
-                    onClick = onRemove,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Remove Defect",
-                        tint = Color(0xFF757575),
-                        modifier = Modifier.size(18.dp)
+                // 图片缩略图展示区域
+                if (defectImages.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    DefectThumbnailRow(
+                        images = defectImages,
+                        onPhotoClick = { path -> largePhotoPath = path }
                     )
                 }
-            }
-            
-            // 图片缩略图展示区域
-            if (defectImages.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                DefectThumbnailRow(
-                    images = defectImages,
-                    onPhotoClick = { path -> largePhotoPath = path }
-                )
             }
         }
     }
@@ -1326,20 +1359,24 @@ private fun DefectSelectionItem(
             Column(
                 modifier = Modifier.weight(1f)
             ) {
-                // 标题行：编号和风险等级标签紧挨着显示，作为一条数据
-                androidx.compose.foundation.layout.FlowRow(
+                // 标题行：缺陷编号和风险等级标签
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp), // 减小间距使其更紧密
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 缺陷编号文本
                     Text(
                         text = "No.${defect.defectNo}",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF222222)
+                        color = Color(0xFF222222),
+                        modifier = Modifier.weight(1f, fill = false)
                     )
+                    
+                    // 风险等级标签
                     if (!defect.riskRating.isNullOrBlank()) {
-                        RiskTag(defect.riskRating!!)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        RiskLevelTag(riskLevel = defect.riskRating!!)
                     }
                 }
                 
@@ -1385,31 +1422,55 @@ private fun DefectSelectionItem(
 
 /**
  * 风险等级标签组件
- * 与历史缺陷列表保持一致的样式
+ * 
+ * 统一的风险等级标签UI组件，具有圆角背景、内边距和颜色配置。
+ * 用于在各个界面中显示风险等级，保持一致的视觉效果。
+ * 
+ * @param riskLevel 风险等级字符串（如P1、P2、P3、P4等）
+ * @param modifier 修饰符
  */
 @Composable
-private fun RiskTag(risk: String) {
-    val (bgColor, textColor) = when (risk.uppercase()) {
-        "P1" -> Color(0xFFFFEBEE) to Color(0xFFD32F2F)
-        "P2" -> Color(0xFFFFF3E0) to Color(0xFFFF5722)
-        "P3" -> Color(0xFFFFF8E1) to Color(0xFFF57C00)
-        "P4" -> Color(0xFFE8F5E8) to Color(0xFF388E3C)
-        "HIGH" -> Color(0xFFFFEBEE) to Color(0xFFD32F2F)
-        "MEDIUM" -> Color(0xFFFFF8E1) to Color(0xFFF57C00)
-        "LOW" -> Color(0xFFE8F5E8) to Color(0xFF388E3C)
-        else -> Color(0xFFF5F5F5) to Color(0xFF666666)
-    }
+private fun RiskLevelTag(
+    riskLevel: String,
+    modifier: Modifier = Modifier
+) {
+    val colorPair = RiskTagColors.getColorPair(riskLevel)
     
     Box(
-        modifier = Modifier
-            .background(bgColor, RoundedCornerShape(4.dp))
+        modifier = modifier
+            .background(
+                color = colorPair.backgroundColor,
+                shape = RoundedCornerShape(4.dp)
+            )
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(
-            text = risk,
+            text = riskLevel.trim().uppercase(),
             fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            color = textColor
+            fontWeight = FontWeight.Bold,
+            color = colorPair.textColor
+        )
+    }
+}
+
+/**
+ * 风险等级标签组件（旧版本，保持兼容性）
+ * 使用统一的颜色配置，与历史缺陷列表保持一致的样式
+ */
+@Composable
+private fun RiskTag(risk: String) {
+    val colorPair = RiskTagColors.getColorPair(risk)
+    
+    Box(
+        modifier = Modifier
+            .background(colorPair.backgroundColor, RoundedCornerShape(3.dp))
+            .padding(horizontal = 4.dp, vertical = 1.dp)
+    ) {
+        Text(
+            text = risk.trim().uppercase(),
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold,
+            color = colorPair.textColor
         )
     }
 }

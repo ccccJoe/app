@@ -29,6 +29,12 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
+import androidx.compose.foundation.border
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
 
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +60,43 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import com.simsapp.data.local.entity.DefectEntity
+import com.simsapp.data.local.entity.EventEntity
+import com.simsapp.data.local.entity.ProjectEntity
+import com.simsapp.ui.common.RiskTagColors
+
+/**
+ * 风险等级标签组件
+ * 
+ * 统一的风险等级标签UI组件，具有圆角背景、内边距和颜色配置。
+ * 用于在各个界面中显示风险等级，保持一致的视觉效果。
+ * 
+ * @param riskLevel 风险等级字符串（如P1、P2、P3、P4等）
+ * @param modifier 修饰符
+ */
+@Composable
+private fun RiskLevelTag(
+    riskLevel: String,
+    modifier: Modifier = Modifier
+) {
+    val colorPair = RiskTagColors.getColorPair(riskLevel)
+    
+    Box(
+        modifier = modifier
+            .background(
+                color = colorPair.backgroundColor,
+                shape = RoundedCornerShape(4.dp)
+            )
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = riskLevel.trim().uppercase(),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = colorPair.textColor
+        )
+    }
+}
 
 /**
  * File: ProjectDetailScreen.kt
@@ -82,7 +125,9 @@ fun ProjectDetailScreen(
 
     // 使用 rememberSaveable 持久化 Tab 选择，保证从 Event 页面返回后仍保持原状态
     var selectedTab by rememberSaveable { mutableStateOf(0) } // 0: Defects, 1: Events
-    var searchText by remember { mutableStateOf("") }
+    // 分别为两个tab维护独立的搜索状态
+    var defectSearchText by remember { mutableStateOf("") }
+    var eventSearchText by remember { mutableStateOf("") }
     var isReorderMode by remember { mutableStateOf(false) }
     var isEventSelectMode by remember { mutableStateOf(false) }
     val selectedEventIds = remember { mutableStateListOf<String>() }
@@ -118,60 +163,156 @@ fun ProjectDetailScreen(
             onOpenProjectInfo = onOpenProjectInfo
         )
 
-        TabRow(selectedTabIndex = selectedTab) {
-                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Historical Defects") })
-                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Events") })
-                    }
+        TabRow(
+            selectedTabIndex = selectedTab,
+            containerColor = Color.White,
+            contentColor = Color(0xFF1976D2),
+            indicator = { }, // 移除底部指示器
+            divider = { } // 移除分割线
+        ) {
+            Tab(
+                selected = selectedTab == 0, 
+                onClick = { selectedTab = 0 },
+                modifier = Modifier.background(
+                    color = if (selectedTab == 0) Color(0xFFE3F2FD) else Color.Transparent,
+                    shape = RoundedCornerShape(4.dp)
+                ),
+                text = { 
+                    Text(
+                        "Historical Defects",
+                        fontSize = 14.sp,
+                        fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal,
+                        color = if (selectedTab == 0) Color(0xFF1976D2) else Color(0xFF666666)
+                    ) 
+                }
+            )
+            Tab(
+                selected = selectedTab == 1, 
+                onClick = { selectedTab = 1 },
+                modifier = Modifier.background(
+                    color = if (selectedTab == 1) Color(0xFFE3F2FD) else Color.Transparent,
+                    shape = RoundedCornerShape(4.dp)
+                ),
+                text = { 
+                    Text(
+                        "Events",
+                        fontSize = 14.sp,
+                        fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal,
+                        color = if (selectedTab == 1) Color(0xFF1976D2) else Color(0xFF666666)
+                    ) 
+                }
+            )
+        }
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp) // 减少内边距以增大内容显示区域
         ) {
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
-                OutlinedTextField(
-                    value = searchText,
-                    onValueChange = { searchText = it },
+                // 将搜索框和按钮放在同一行，完全匹配图片设计
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 44.dp),
-                    placeholder = { Text("Search") },
-                    singleLine = true,
-                    textStyle = LocalTextStyle.current.copy(fontSize = 14.sp, color = Color(0xFF222222)),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                        .padding(horizontal = 8.dp, vertical = 4.dp), // 进一步减少Row内部的padding
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp) // 减小间距
+                ) {
+                    // 搜索框样式匹配图片
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(38.dp)
+                            .border(
+                                width = 1.dp,
+                                color = Color(0xFFE0E0E0),
+                                shape = RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        BasicTextField(
+                            value = if (selectedTab == 0) defectSearchText else eventSearchText,
+                            onValueChange = { text ->
+                                if (selectedTab == 0) {
+                                    defectSearchText = text
+                                } else {
+                                    eventSearchText = text
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = LocalTextStyle.current.copy(
+                                fontSize = 13.sp,
+                                color = Color(0xFF333333)
+                            ),
+                            cursorBrush = SolidColor(Color(0xFF1976D2))
+                        )
+                        if ((selectedTab == 0 && defectSearchText.isEmpty()) || (selectedTab == 1 && eventSearchText.isEmpty())) {
+                            Text(
+                                text = "Search",
+                                fontSize = 13.sp,
+                                color = Color(0xFF999999)
+                            )
+                        }
+                    }
+                    
+                    // 按钮样式匹配图片中的灰色矩形按钮
                     if (selectedTab == 0) {
+                        // Sort按钮，灰色背景，禁用状态
                         Button(
-                            onClick = { isReorderMode = !isReorderMode },
-                            modifier = Modifier.height(32.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                        ) { Text(if (isReorderMode) "Finish Sorting" else "Sort") }
+                            onClick = { /* 不执行任何操作 */ },
+                            modifier = Modifier
+                                .height(38.dp) // 与搜索框高度保持一致
+                                .width(60.dp), // 固定宽度
+                            shape = RoundedCornerShape(4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFE0E0E0), // 灰色背景
+                                contentColor = Color(0xFF666666), // 灰色文字
+                                disabledContainerColor = Color(0xFFE0E0E0),
+                                disabledContentColor = Color(0xFF666666)
+                            ),
+                            contentPadding = PaddingValues(0.dp),
+                            enabled = false // 禁用按钮
+                        ) { 
+                            Text(
+                                "Sort", 
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Normal
+                            ) 
+                        }
                     } else {
+                        // Sync按钮，保持原有样式但调整尺寸
                         Button(
                             onClick = {
                                 isEventSelectMode = true
                                 selectedEventIds.clear()
                             },
-                            modifier = Modifier.height(32.dp),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
-                        ) { Text("Sync") }
+                            modifier = Modifier
+                                .height(38.dp) // 与搜索框高度保持一致
+                                .width(60.dp), // 固定宽度
+                            shape = RoundedCornerShape(4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
+                            contentPadding = PaddingValues(0.dp)
+                        ) { 
+                            Text(
+                                "Sync", 
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Normal
+                            ) 
+                        }
                     }
                 }
-                if (selectedTab == 0 && isReorderMode) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = "Long press and drag to reorder", color = Color(0xFF9E9E9E), fontSize = 11.sp)
-                }
+                // 移除排序模式相关的提示文本
             }
         }
 
         Box(modifier = Modifier.fillMaxSize().weight(1f)) {
             when (selectedTab) {
                 0 -> HistoryDefectList(
-                    searchText = searchText, 
+                    searchText = defectSearchText, 
                     defects = defects, 
                     onOpenDefect = { no -> onOpenDefect(no) },
                     onCreateEventForDefect = { defectNo -> 
@@ -181,7 +322,7 @@ fun ProjectDetailScreen(
                 )
                 1 -> EventList(
                     projectName = projectName,
-                    searchText = searchText,
+                    searchText = eventSearchText,
                     selectionMode = isEventSelectMode,
                     selectedIds = selectedEventIds,
                     onToggle = { id -> if (selectedEventIds.contains(id)) selectedEventIds.remove(id) else selectedEventIds.add(id) },
@@ -455,25 +596,26 @@ private fun PriorityTag(priority: String) {
 /**
  * RiskTag
  * A small label used to visualize risk rating levels with distinct colors.
- * Supported values: P1/High (red), P2/Medium (orange), P3/Low (green). Others fall back to gray.
+ * Uses unified color configuration to maintain consistency across all interfaces.
+ * Supported values: P0-P4, HIGH/MEDIUM/LOW. Others fall back to default gray.
  * - Parameters:
  *   - risk: String risk level text, case-insensitive.
  */
 @Composable
 private fun RiskTag(risk: String) {
-    val key = risk.trim().uppercase()
-    val (bg, fg) = when (key) {
-        "P1", "HIGH" -> Color(0xFFFFEAEA) to Color(0xFFD32F2F)
-        "P2", "MEDIUM" -> Color(0xFFFFF4E5) to Color(0xFFF57C00)
-        "P3", "LOW" -> Color(0xFFE8F5E9) to Color(0xFF2E7D32)
-        else -> Color(0xFFECEFF1) to Color(0xFF607D8B)
-    }
+    val colorPair = RiskTagColors.getColorPair(risk)
+    
     Box(
         modifier = Modifier
-            .background(bg, RoundedCornerShape(12.dp))
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .background(colorPair.backgroundColor, RoundedCornerShape(3.dp))
+            .padding(horizontal = 4.dp, vertical = 1.dp)
     ) {
-        Text(text = key, color = fg, fontSize = 10.sp)
+        Text(
+            text = risk.trim().uppercase(), 
+            color = colorPair.textColor, 
+            fontSize = 8.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -611,20 +753,24 @@ private fun HistoryDefectCard(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            // 调整标题布局：No 与 Tag 紧挨着显示，作为一条数据，若 No 换行则 Tag 跟随换行
-            androidx.compose.foundation.layout.FlowRow(
+            // 标题布局：缺陷编号和风险等级标签
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp), // 减小间距使其更紧密
-                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // 缺陷编号文本
                 Text(
                     text = "No.${item.no}",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF222222)
+                    color = Color(0xFF222222),
+                    modifier = Modifier.weight(1f, fill = false)
                 )
+                
+                // 风险等级标签
                 if (item.riskRating.isNotBlank()) {
-                    RiskTag(item.riskRating)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    RiskLevelTag(riskLevel = item.riskRating)
                 }
             }
             

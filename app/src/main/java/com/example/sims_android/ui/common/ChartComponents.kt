@@ -173,112 +173,102 @@ fun BarChart(
 ) {
     // 将不同项目的数据按系列合计，只展示三根柱子
     val seriesOrder = listOf("历史Defect", "已关联Defect", "未关联Defect")
+    
+    android.util.Log.d("BarChart", "Input data size: ${data.size}")
+    data.forEach { triple ->
+        android.util.Log.d("BarChart", "Input: ${triple.first} - ${triple.second} = ${triple.third}")
+    }
+    
     val totals: List<Pair<String, Float>> = seriesOrder.map { label ->
-        val sum = data.filter { it.second.contains(label) }
-            .sumOf { it.third.toDouble() }
-            .toFloat()
+        val filteredData = data.filter { it.second == label } // 改为精确匹配
+        val sum = filteredData.sumOf { it.third.toDouble() }.toFloat()
+        android.util.Log.d("BarChart", "Series: $label, Filtered count: ${filteredData.size}, Sum: $sum")
+        filteredData.forEach { triple ->
+            android.util.Log.d("BarChart", "  - ${triple.first}: ${triple.second} = ${triple.third}")
+        }
         label to sum
     }
+    
+    android.util.Log.d("BarChart", "Final totals: $totals")
 
     val yMax = (totals.maxOfOrNull { it.second } ?: 1f).coerceAtLeast(1f)
     val barWidth = 18.dp
 
     BoxWithConstraints(modifier = modifier) {
-        // 预留图例高度与间距，防止被父容器固定高度裁剪
-        val legendHeight = 24.dp
-        val spacing = 8.dp
-        val available = maxHeight - legendHeight - spacing
-        val chartHeight = if (available < 60.dp) 60.dp else available
+        // 移除图例，使用全部可用高度显示图表
+        val chartHeight = maxHeight
 
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(chartHeight),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            // Y轴刻度
+            val tickCount = 4
+            val ticks = (0..tickCount).map { i -> (yMax * i / tickCount) }
+
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(chartHeight),
-                verticalAlignment = Alignment.Bottom
+                    .width(30.dp)
+                    .fillMaxHeight()
             ) {
-                // Y轴刻度
-                val tickCount = 4
-                val ticks = (0..tickCount).map { i -> (yMax * i / tickCount) }
-
-                Box(
-                    modifier = Modifier
-                        .width(30.dp)
-                        .fillMaxHeight()
+                // 刻度数字（自上而下 yMax..0）
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // 刻度数字（自上而下 yMax..0）
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        ticks.reversed().forEach { v ->
-                            Text(
-                                text = v.toInt().toString(),
-                                fontSize = 9.sp,
-                                color = Color(0xFF999999)
-                            )
-                        }
-                    }
-                }
-
-                // 图形区域（网格 + 三根柱子）
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                ) {
-                    // 网格线
-                    Column(
-                        modifier = Modifier.matchParentSize(),
-                        verticalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        repeat(5) {
-                            // Replace deprecated Divider usage
-                            HorizontalDivider(color = Color(0xFFEAEAEA), thickness = 1.dp)
-                        }
-                    }
-
-                    // 三根并列柱
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .padding(horizontal = 24.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        totals.forEachIndexed { index, (_, value) ->
-                            val heightDp = ((value / yMax) * chartHeight.value).dp
-                            val color = when (index) {
-                                0 -> Color(0xFF4A90E2) // 历史Defect
-                                1 -> Color(0xFF7ED321) // 已关联Defect
-                                else -> Color(0xFF2E7D32) // 未关联Defect
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .width(barWidth)
-                                    .height(heightDp)
-                                    .background(color, RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                            )
-                        }
+                    ticks.reversed().forEach { v ->
+                        Text(
+                            text = v.toInt().toString(),
+                            fontSize = 9.sp,
+                            color = Color(0xFF999999)
+                        )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(spacing))
-            // 图例：一行显示在柱状图下方
-            Row(
+            // 图形区域（网格 + 三根柱子）
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(legendHeight),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                    .weight(1f)
+                    .fillMaxHeight()
             ) {
-                LegendItem(color = Color(0xFF4A90E2), label = "历史Defect")
-                Spacer(modifier = Modifier.width(16.dp))
-                LegendItem(color = Color(0xFF7ED321), label = "已关联Defect")
-                Spacer(modifier = Modifier.width(16.dp))
-                LegendItem(color = Color(0xFF2E7D32), label = "未关联Defect")
+                // 网格线
+                Column(
+                    modifier = Modifier.matchParentSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    repeat(5) {
+                        // Replace deprecated Divider usage
+                        HorizontalDivider(color = Color(0xFFEAEAEA), thickness = 1.dp)
+                    }
+                }
+
+                // 三根并列柱
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    totals.forEachIndexed { index, (_, value) ->
+                        val heightDp = ((value / yMax) * chartHeight.value).dp
+                        val color = when (index) {
+                            0 -> Color(0xFF4A90E2) // 历史Defect
+                            1 -> Color(0xFF7ED321) // 已关联Defect
+                            else -> Color(0xFF2E7D32) // 未关联Defect
+                        }
+                        Box(
+                            modifier = Modifier
+                                .width(barWidth)
+                                .height(heightDp)
+                                .background(color, RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                        )
+                    }
+                }
             }
         }
     }
@@ -296,17 +286,17 @@ private fun LegendItem(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)  // 增加图标与文字间距
     ) {
         Box(
             modifier = Modifier
-                .size(8.dp)
+                .size(10.dp)  // 增加图标大小
                 .clip(CircleShape)
                 .background(color)
         )
         Text(
             text = label,
-            fontSize = 10.sp,
+            fontSize = 11.sp,  // 增加字体大小
             color = Color(0xFF666666)
         )
     }

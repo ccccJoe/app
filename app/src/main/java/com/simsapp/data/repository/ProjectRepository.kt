@@ -39,7 +39,8 @@ class ProjectRepository @Inject constructor(
     private val gson: Gson,
     @ApplicationContext private val appContext: Context,
     private val projectDetailDao: com.simsapp.data.local.dao.ProjectDetailDao,
-    private val defectRepository: DefectRepository
+    private val defectRepository: DefectRepository,
+    private val eventRepository: EventRepository
 ) {
     /** 全局同步状态：用于跨页面/前后台保持“同步中”标识 */
     private val _isSyncing = MutableStateFlow(false)
@@ -448,7 +449,7 @@ class ProjectRepository @Inject constructor(
      * 函数：updateProjectCounts
      * 说明：根据数据库中实际的defect和event数据更新项目的defect_count和event_count字段
      * - defect_count: 该项目下所有缺陷的数量（优先使用defect表，如果为空则从ProjectDetail解析）
-     * - event_count: 该项目下所有缺陷关联的事件总数量
+     * - event_count: 该项目下的事件列表数量（直接统计event表记录数）
      * 
      * @param projectUid 项目唯一标识
      */
@@ -470,8 +471,8 @@ class ProjectRepository @Inject constructor(
                 }
             }
             
-            // 统计该项目下所有缺陷关联的事件总数量
-            val eventCount = defects.sumOf { defect -> defect.eventCount }
+            // 统计该项目下的事件列表数量（直接统计event表记录数）
+            val eventCount = eventRepository.getEventsByProjectUid(projectUid).first().size
             
             // 更新项目的计数字段
             projectDao.updateCounters(project.projectId, defectCount, eventCount)
