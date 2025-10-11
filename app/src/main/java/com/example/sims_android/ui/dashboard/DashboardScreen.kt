@@ -61,6 +61,7 @@ fun DashboardScreen(
     onProjectClick: (ProjectCardData) -> Unit = {},
     onEventCreate: () -> Unit = {},
     onSyncClick: () -> Unit = {},
+    onCleanClick: () -> Unit = {},
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
 
@@ -172,7 +173,7 @@ fun DashboardScreen(
                         showSyncConfirm = true
                     },
                     isSyncing = syncState.isLoading,
-                    onCleanClick = { },
+                    onCleanClick = onCleanClick,
                     isCleaning = false
                 )
             }
@@ -392,25 +393,33 @@ private fun ActionButtonsSection(
             )
         }
         
-        // 清理按钮：去掉点击行为（禁用）
+        // 清理按钮：启用点击功能，导航到项目清理页面
         Button(
-            onClick = {},
+            onClick = { onCleanClick() },
             modifier = Modifier.weight(1f),
-            enabled = false,
+            enabled = !isCleaning,
             colors = ButtonDefaults.buttonColors(
                 containerColor = Color(0xFFE74C3C)
             ),
             shape = RoundedCornerShape(8.dp)
         ) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "Clean",
-                tint = Color.White,
-                modifier = Modifier.size(18.dp)
-            )
+            if (isCleaning) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp)
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Clean",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Clean",
+                text = if (isCleaning) "Cleaning…" else "Clean",
                 color = Color.White,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium

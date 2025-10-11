@@ -36,6 +36,10 @@ interface EventDao {
     @Query("DELETE FROM event WHERE event_id = :id")
     suspend fun deleteById(id: Long)
 
+    /** Delete all events for a project by project_id. */
+    @Query("DELETE FROM event WHERE project_id = :projectId")
+    suspend fun deleteByProjectId(projectId: Long)
+
     /** Get all events for a project by project_id. */
     @Query("SELECT * FROM event WHERE project_id = :projectId ORDER BY last_edit_time DESC")
     fun getByProject(projectId: Long): Flow<List<EventEntity>>

@@ -32,6 +32,9 @@ import androidx.activity.viewModels
 import com.simsapp.ui.dashboard.DashboardViewModel
 import com.simsapp.ui.project.ProjectInfoScreen
 import com.simsapp.ui.defect.DefectDetailScreen
+import com.example.sims_android.ui.project.DefectSortScreen
+import com.simsapp.ui.project.HistoryDefectItem
+import com.simsapp.ui.storage.ProjectCleanupScreen
 import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -123,6 +126,20 @@ class MainActivity : ComponentActivity() {
                 return "defect?no=$encodedNo&projectUid=$uid"
             }
         }
+        
+        /** Defect sort page with required argument: projectUid */
+        data object DefectSort : AppDestination("defect_sort?projectUid={projectUid}") {
+            const val ARG_PROJECT_UID = "projectUid"
+            fun route(projectUid: String?): String {
+                val uid = Uri.encode(projectUid ?: "")
+                return "defect_sort?projectUid=$uid"
+            }
+        }
+        
+        /** Project cleanup page: show finished projects for cleanup */
+        data object ProjectCleanup : AppDestination("project_cleanup") {
+            fun route(): String = "project_cleanup"
+        }
     }
 
     /**
@@ -196,6 +213,9 @@ class MainActivity : ComponentActivity() {
                                 onEventCreate = {
                                     navController.navigate(AppDestination.Event.route())
                                 },
+                                onCleanClick = {
+                                    navController.navigate(AppDestination.ProjectCleanup.route())
+                                },
                                 viewModel = dashboardViewModel
                             )
                         }
@@ -236,6 +256,17 @@ class MainActivity : ComponentActivity() {
                             },
                             onOpenDefect = { no ->
                                 navController.navigate(AppDestination.DefectDetail.route(no, projectUid))
+                            },
+                            onOpenDefectSort = { defects ->
+                                // 安全地将缺陷列表保存到当前导航条目的savedStateHandle中
+                                try {
+                                    navController.currentBackStackEntry?.savedStateHandle?.set("defects", defects)
+                                    navController.navigate(AppDestination.DefectSort.route(projectUid))
+                                } catch (e: Exception) {
+                                    // 记录错误并显示提示
+                                    e.printStackTrace()
+                                    Toast.makeText(this@MainActivity, "Failed to open sort page", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         )
                     }
@@ -369,6 +400,55 @@ class MainActivity : ComponentActivity() {
                             defectNo = defectNo,
                             projectUid = projectUidArg.ifBlank { null },
                             onBack = { navController.popBackStack() }
+                        )
+                    }
+                    
+                    // 7) DefectSort page
+                    composable(
+                        route = AppDestination.DefectSort.route,
+                        arguments = listOf(
+                            navArgument(AppDestination.DefectSort.ARG_PROJECT_UID) {
+                                type = NavType.StringType
+                                defaultValue = ""
+                            }
+                        )
+                    ) { backStackEntry ->
+                        val uidEncoded = backStackEntry.arguments?.getString(AppDestination.DefectSort.ARG_PROJECT_UID).orEmpty()
+                        val projectUid = Uri.decode(uidEncoded)
+                        
+                        // 获取 ProjectDetailViewModel 实例
+                        val projectDetailViewModel: com.simsapp.ui.project.ProjectDetailViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+                        
+                        // 从前一个页面获取缺陷列表数据，添加安全检查
+                        val defects: List<HistoryDefectItem> = try {
+                            navController.previousBackStackEntry?.savedStateHandle?.get<List<HistoryDefectItem>>("defects") ?: emptyList()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            emptyList()
+                        }
+                        
+                        DefectSortScreen(
+                            defects = defects,
+                            viewModel = projectDetailViewModel,
+                            onBack = { navController.popBackStack() },
+                            onConfirm = { sortedDefects: List<HistoryDefectItem> ->
+                                // 将排序结果返回给前一个页面，添加安全检查
+                                try {
+                                    navController.previousBackStackEntry?.savedStateHandle?.set("sortedDefects", sortedDefects)
+                                    navController.popBackStack()
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                    // 即使出错也要返回，避免用户卡在排序页面
+                                    navController.popBackStack()
+                                }
+                            }
+                        )
+                    }
+                    
+                    // 8) ProjectCleanup page
+                    composable(route = AppDestination.ProjectCleanup.route) {
+                        ProjectCleanupScreen(
+                            onNavigateBack = { navController.popBackStack() }
                         )
                     }
                     }

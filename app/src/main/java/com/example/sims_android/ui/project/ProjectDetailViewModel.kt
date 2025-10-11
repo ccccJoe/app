@@ -164,7 +164,7 @@ class ProjectDetailViewModel @Inject constructor(
                     dir.listFiles()
                         ?.sortedBy { it.name }
                         ?.map { it.absolutePath }
-                        ?.take(3)
+                        // 移除 .take(3) 限制，支持显示所有图片并左右滑动查看
                         ?: emptyList()
                 } else emptyList()
                 
@@ -550,6 +550,23 @@ class ProjectDetailViewModel @Inject constructor(
     }
 
     // 新增：通用显示字符串清洗，后端若返回字符串 "null" 也按空白处理
+    /**
+     * 更新历史缺陷的排序顺序
+     * 用于Sort按钮功能，更新本地缓存的缺陷顺序
+     */
+    fun updateDefectOrder(reorderedDefects: List<HistoryDefectItem>) {
+        viewModelScope.launch {
+            try {
+                // 更新StateFlow中的缺陷顺序
+                _historyDefects.value = reorderedDefects
+                
+                Log.d("ProjectDetailViewModel", "Defect order updated successfully. New order: ${reorderedDefects.map { it.no }}")
+            } catch (e: Exception) {
+                Log.e("ProjectDetailViewModel", "Failed to update defect order", e)
+            }
+        }
+    }
+
     private fun sanitizeDisplayString(raw: String?): String {
         val s = raw?.trim() ?: return ""
         if (s.isEmpty()) return ""

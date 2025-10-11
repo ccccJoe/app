@@ -61,6 +61,9 @@ class EventRepository @Inject constructor(
     /** Delete event by id. */
     suspend fun delete(id: Long) = dao.deleteById(id)
 
+    /** Delete all events for a project by project_id. */
+    suspend fun deleteByProjectId(projectId: Long) = dao.deleteByProjectId(projectId)
+
     /** Upload a local file to the server, returns success flag. */
     suspend fun uploadAsset(file: File, projectId: Long, eventId: Long?): Boolean = try {
         val body = file.asRequestBody("application/octet-stream".toMediaTypeOrNull())
@@ -104,7 +107,7 @@ class EventRepository @Inject constructor(
         val sha256 = sha256Of(zipFile)
 
         // 3) 获取上传票据（Header由拦截器统一注入，除非显式覆写参数）
-        val ticketUrl = "https://sims.ink-stone.win/zuul/sims-master/storage/upload/ticket"
+        val ticketUrl = "https://sims.ink-stone.win/zuul/sims-ym/storage/upload/ticket"
         val ticketResp = try {
             api.getUploadTicket(
                 endpoint = ticketUrl,

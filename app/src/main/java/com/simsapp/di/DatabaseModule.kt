@@ -15,6 +15,7 @@ import com.simsapp.data.local.dao.DefectDao
 import com.simsapp.data.local.dao.EventDao
 import com.simsapp.data.local.dao.ProjectDao
 import com.simsapp.data.local.dao.ProjectDetailDao
+import com.simsapp.data.local.dao.ProjectDigitalAssetDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -139,14 +140,46 @@ object DatabaseModule {
         }
     }
 
-    /**
-     * Database migration from version 6 to 7.
-     * Adds type field to DefectEntity for defect type classification.
-     */
+    /** Migration: v6 -> v7, add asset table for digital assets. */
     private val MIGRATION_6_7 = object : Migration(6, 7) {
         override fun migrate(database: SupportSQLiteDatabase) {
-            // 添加type字段到defect表
-            database.execSQL("ALTER TABLE defect ADD COLUMN type TEXT NOT NULL DEFAULT ''")
+            // Add asset table for digital assets
+            database.execSQL("CREATE TABLE IF NOT EXISTS asset (asset_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, type TEXT NOT NULL, url TEXT NOT NULL, event_id INTEGER, project_id INTEGER, FOREIGN KEY(event_id) REFERENCES event(event_id) ON DELETE CASCADE, FOREIGN KEY(project_id) REFERENCES project(project_id) ON DELETE CASCADE)")
+        }
+    }
+
+    /** Migration: v7 -> v8, add project_digital_asset table for digital asset tree structure. */
+    private val MIGRATION_7_8 = object : Migration(7, 8) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Add project_digital_asset table for digital asset tree structure
+            database.execSQL("CREATE TABLE IF NOT EXISTS project_digital_asset (" +
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "project_uid TEXT NOT NULL, " +
+                    "node_id TEXT NOT NULL, " +
+                    "parent_id TEXT, " +
+                    "name TEXT NOT NULL, " +
+                    "type TEXT NOT NULL, " +
+                    "file_id TEXT, " +
+                    "local_path TEXT, " +
+                    "download_status TEXT NOT NULL, " +
+                    "download_url TEXT, " +
+                    "file_size INTEGER, " +
+                    "created_at INTEGER NOT NULL, " +
+                    "updated_at INTEGER NOT NULL)")
+            
+            // Create indexes for better query performance
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_project_digital_asset_project_uid ON project_digital_asset (project_uid)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_project_digital_asset_node_id ON project_digital_asset (node_id)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_project_digital_asset_parent_id ON project_digital_asset (parent_id)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_project_digital_asset_file_id ON project_digital_asset (file_id)")
+        }
+    }
+
+    /** Migration: v8 -> v9, add content field to project_digital_asset table for storing JSON data. */
+    private val MIGRATION_8_9 = object : Migration(8, 9) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Add content column to project_digital_asset table
+            database.execSQL("ALTER TABLE project_digital_asset ADD COLUMN content TEXT")
         }
     }
 
@@ -160,7 +193,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "sims.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
             // 仅调试构建启用破坏性迁移，避免老设备上的历史 DB 版本导致崩溃
             .apply {
                 if (com.simsapp.BuildConfig.DEBUG) fallbackToDestructiveMigration()
@@ -186,4 +219,8 @@ object DatabaseModule {
     /** Provide ProjectDetailDao. */
     @Provides
     fun provideProjectDetailDao(db: AppDatabase): ProjectDetailDao = db.projectDetailDao()
+
+    /** Provide ProjectDigitalAssetDao. */
+    @Provides
+    fun provideProjectDigitalAssetDao(db: AppDatabase): ProjectDigitalAssetDao = db.projectDigitalAssetDao()
 }

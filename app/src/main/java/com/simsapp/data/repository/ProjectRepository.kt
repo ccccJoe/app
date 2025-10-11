@@ -5,27 +5,38 @@
  */
 package com.simsapp.data.repository
 
+import android.content.Context
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import com.simsapp.data.local.dao.ProjectDao
 import com.simsapp.data.local.entity.ProjectEntity
 import com.simsapp.data.remote.ApiService
+
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import okhttp3.ResponseBody
-import android.util.Log
-import javax.inject.Inject
-import javax.inject.Singleton
-import android.content.Context
-import dagger.hilt.android.qualifiers.ApplicationContext
-import java.io.File
-import java.io.FileOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * DeleteResult
+ * 
+ * Represents the result of a delete operation.
+ */
+data class DeleteResult(
+    val isSuccess: Boolean,
+    val errorMessage: String? = null
+)
 
 /**
  * ProjectRepository
@@ -40,7 +51,8 @@ class ProjectRepository @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val projectDetailDao: com.simsapp.data.local.dao.ProjectDetailDao,
     private val defectRepository: DefectRepository,
-    private val eventRepository: EventRepository
+    private val eventRepository: EventRepository,
+    private val projectDigitalAssetRepository: ProjectDigitalAssetRepository
 ) {
     /** 全局同步状态：用于跨页面/前后台保持“同步中”标识 */
     private val _isSyncing = MutableStateFlow(false)
@@ -116,7 +128,7 @@ class ProjectRepository @Inject constructor(
      * 2. 使用返回结果中的 data[0].url（接口可能直接返回纯文本URL或 JSON）来下载风险矩阵 JSON
      * 3. 解析为 RiskMatrixPayload 返回
      *
-     * @param endpoint 完整解析接口 URL，例如：https://sims.ink-stone.win/zuul/sims-master/storage/download/url
+     * @param endpoint 完整解析接口 URL，例如：https://sims.ink-stone.win/zuul/sims-ym/storage/download/url
      * @param fileIds 文件ID列表（仅使用首个）
      */
     suspend fun fetchRiskMatrix(endpoint: String, fileIds: List<String>): Result<RiskMatrixPayload> {
@@ -136,7 +148,7 @@ class ProjectRepository @Inject constructor(
                 ?: return Result.failure(IllegalStateException("No url found in resolve response"))
 
             // 第二步：下载 JSON
-            val fileResp = api.downloadRiskMatrix(downloadUrl)
+            val fileResp = api.downloadRiskMatrixByUrl(downloadUrl)
             if (!fileResp.isSuccessful) {
                 return Result.failure(IllegalStateException("download failed ${fileResp.code()}"))
             }
@@ -174,7 +186,7 @@ class ProjectRepository @Inject constructor(
 
     // 新增：项目详情接口固定端点（不含查询参数）
     private val projectDetailEndpoint: String =
-        "https://sims.ink-stone.win/zuul/sims-master/app/project/project"
+        "https://sims.ink-stone.win/zuul/sims-ym/app/project/project"
 
     /**
      * 函数：syncProjectsFromEndpoint
@@ -236,9 +248,21 @@ class ProjectRepository @Inject constructor(
 
             Log.i("SIMS-SYNC", "Projects analysis: total=${remoteEntities.size}, toUpdate=${projectsToUpdate.size}, toSkip=${projectsToSkip.size}")
 
-            // 批量更新所有项目的基本信息（使用 insertOrUpdateAll）
-            projectDao.insertOrUpdateAll(remoteEntities)
-            Log.i("SIMS-SYNC", "Updated all projects basic info: ${remoteEntities.size}")
+            // 仅更新需要更新的项目的基本信息，保留hash值一致项目的本地缓存数据
+            if (projectsToUpdate.isNotEmpty()) {
+                projectDao.insertOrUpdateAll(projectsToUpdate)
+                Log.i("SIMS-SYNC", "Updated projects basic info: ${projectsToUpdate.size}")
+            }
+            
+            // 对于hash值一致的项目，仅更新计数器等可能变化的字段，保留其他本地缓存数据
+            for (entity in projectsToSkip) {
+                val localProject = projectDao.getByUid(entity.projectUid)
+                if (localProject != null) {
+                    // 仅更新可能变化的计数器字段，保留其他本地数据
+                    projectDao.updateCounters(localProject.projectId, entity.defectCount, entity.eventCount)
+                }
+            }
+            Log.i("SIMS-SYNC", "Updated counters for ${projectsToSkip.size} unchanged projects")
 
             // 仅对需要更新的项目拉取详情
             var detailUpdateCount = 0
@@ -285,8 +309,20 @@ class ProjectRepository @Inject constructor(
                         cacheHistoryDefectImages(projectUid = uid, detailJson = detailJson)
                         // 缓存历史缺陷数据到defect表
                         cacheHistoryDefectsToDatabase(projectId = localProject.projectId, projectUid = uid, detailJson = detailJson)
+                        
+                        // 处理数字资产树，解析并下载所有file_id不为null的节点
+                        try {
+                            val (successCount, totalCount) = projectDigitalAssetRepository.processDigitalAssetTree(
+                                projectId = localProject.projectId,
+                                projectUid = uid,
+                                projectDetailJson = detailJson
+                            )
+                            Log.d("SIMS-SYNC", "Digital asset processing completed for project uid=$uid: $successCount/$totalCount assets processed")
+                        } catch (e: Exception) {
+                            Log.e("SIMS-SYNC", "Digital asset processing error for project uid=$uid: ${e.message}", e)
+                        }
                     } catch (e: Exception) {
-                        Log.e("SIMS-SYNC", "cache images error uid=$uid, ${e.message}", e)
+                        Log.e("SIMS-SYNC", "cache images/assets error uid=$uid, ${e.message}", e)
                     }
                 }
             } catch (e: Exception) {
@@ -446,6 +482,37 @@ class ProjectRepository @Inject constructor(
     suspend fun getProjectCount(): Int = projectDao.count()
 
     /**
+     * 获取所有已完成状态的项目
+     * @return 已完成状态的项目列表
+     */
+    fun getFinishedProjects(): Flow<List<ProjectEntity>> = projectDao.getFinishedProjects()
+
+    /**
+     * 批量删除项目及其相关数据
+     * @param projectIds 要删除的项目ID列表
+     * @return 删除操作的结果
+     */
+    suspend fun deleteProjectsAndRelatedData(projectIds: List<Long>): DeleteResult {
+        return try {
+            // 删除项目相关的所有数据
+            for (projectId in projectIds) {
+                // 删除项目下的缺陷
+                defectRepository.deleteByProjectId(projectId)
+                // 删除项目下的事件
+                eventRepository.deleteByProjectId(projectId)
+                // 删除项目详情
+                projectDetailDao.deleteByProjectId(projectId)
+            }
+            // 最后删除项目本身
+            projectDao.deleteByIds(projectIds)
+            
+            DeleteResult(isSuccess = true)
+        } catch (e: Exception) {
+            DeleteResult(isSuccess = false, errorMessage = e.message)
+        }
+    }
+
+    /**
      * 函数：updateProjectCounts
      * 说明：根据数据库中实际的defect和event数据更新项目的defect_count和event_count字段
      * - defect_count: 该项目下所有缺陷的数量（优先使用defect表，如果为空则从ProjectDetail解析）
@@ -587,7 +654,7 @@ class ProjectRepository @Inject constructor(
     // ... existing code ...
     // 新增：历史缺陷图片下载链接解析端点
     private val storageDownloadEndpoint: String =
-        "https://sims.ink-stone.win/zuul/sims-master/storage/download/url"
+        "https://sims.ink-stone.win/zuul/sims-ym/storage/download/url"
 
     /**
      * 解析项目详情 JSON，遍历 history_defect_list：
@@ -623,7 +690,7 @@ class ProjectRepository @Inject constructor(
                 // 下载每个 URL 文件
                 urls.forEachIndexed { index, url ->
                     try {
-                        val resp = api.downloadRiskMatrix(url) // 复用通用 @GET(@Url)
+                        val resp = api.downloadRiskMatrixByUrl(url) // 复用通用 @GET(@Url)
                         if (!resp.isSuccessful) {
                             Log.w("SIMS-SYNC", "download pic failed ${resp.code()} | $url")
                             return@forEachIndexed

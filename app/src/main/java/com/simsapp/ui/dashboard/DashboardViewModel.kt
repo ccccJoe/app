@@ -56,7 +56,7 @@ class DashboardViewModel @Inject constructor(
         // 异步初始化，避免阻塞UI线程
         viewModelScope.launch {
             try {
-                // 移除延迟，直接更新项目计数
+                // 更新项目计数
                 projectRepository.updateAllProjectCounts()
                 Log.i("DashboardViewModel", "Updated project counts on initialization")
                 
@@ -64,7 +64,7 @@ class DashboardViewModel @Inject constructor(
                 _isInitialized.value = true
                 Log.i("DashboardViewModel", "Dashboard initialization completed")
             } catch (e: Exception) {
-                Log.w("DashboardViewModel", "Failed to update project counts on initialization: ${e.message}")
+                Log.w("DashboardViewModel", "Failed to initialize dashboard: ${e.message}")
                 // 即使失败也标记为已初始化，避免无限loading
                 _isInitialized.value = true
             }
@@ -303,7 +303,48 @@ class DashboardViewModel @Inject constructor(
 
     // 固定的远端同步地址（来自需求），亦可在未来由配置或后端下发。
     private val projectListEndpoint: String =
-        "https://sims.ink-stone.win/zuul/sims-master/app/project/project_list"
+        "https://sims.ink-stone.win/zuul/sims-ym/app/project/project_list"
+
+    /**
+     * 函数：syncProjectsInBackground
+     * 说明：后台同步项目，不显示loading状态，用于应用启动时的自动同步
+     */
+    private fun syncProjectsInBackground() {
+        viewModelScope.launch {
+            try {
+                // 检查网络状态
+                if (!networkUtils.isNetworkAvailable()) {
+                    Log.w("SIMS-SYNC", "Network not available, background sync cancelled")
+                    return@launch
+                }
+                
+                if (!networkUtils.isNetworkSuitableForSync()) {
+                    Log.w("SIMS-SYNC", "Network quality poor, background sync cancelled")
+                    return@launch
+                }
+                
+                Log.i("SIMS-SYNC", "Starting background sync")
+                val result = projectRepository.syncProjectsFromEndpoint(
+                    endpoint = projectListEndpoint
+                )
+                result
+                    .onSuccess { count ->
+                        // 同步成功后，更新所有项目的计数字段
+                        try {
+                            projectRepository.updateAllProjectCounts()
+                            Log.i("SIMS-SYNC", "Background sync completed: inserted=$count")
+                        } catch (e: Exception) {
+                            Log.w("SIMS-SYNC", "Failed to update project counts after background sync: ${e.message}")
+                        }
+                    }
+                    .onFailure { e ->
+                        Log.e("SIMS-SYNC", "Background sync failed: ${e.message}", e)
+                    }
+            } catch (e: Exception) {
+                Log.e("SIMS-SYNC", "Background sync error: ${e.message}", e)
+            }
+        }
+    }
 
     /**
      * 函数：syncProjects

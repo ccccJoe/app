@@ -21,9 +21,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import com.simsapp.data.repository.DefectRepository
 import com.simsapp.data.local.entity.DefectEntity
+import com.simsapp.data.repository.RiskMatrixRepository
 import com.simsapp.data.repository.EventRepository
 import com.simsapp.data.local.dao.ProjectDao
 import com.simsapp.data.local.entity.EventEntity
+import com.example.sims_android.ui.event.buildRiskMatrixLoaderFromRepository
+import com.example.sims_android.ui.event.buildRiskMatrixLoaderFromLocalCache
 import android.util.Log
 
 /**
@@ -52,7 +55,9 @@ class EventFormViewModel @Inject constructor(
     private val gson: Gson,
     private val eventRepo: EventRepository,
     val projectDao: ProjectDao,
-    private val defectRepository: DefectRepository
+    private val defectRepository: DefectRepository,
+    private val riskMatrixRepository: RiskMatrixRepository,
+    private val projectDigitalAssetDao: com.simsapp.data.local.dao.ProjectDigitalAssetDao
 ) : ViewModel() {
 
     /**
@@ -453,15 +458,43 @@ class EventFormViewModel @Inject constructor(
     /**
      * 函数：createRiskMatrixLoader
      * 说明：创建风险矩阵加载器，供EventFormScreen使用
+     * 优先从本地数字资产缓存加载，提升性能和离线可用性
      * 
+     * @param projectName 项目名称，用于获取项目UID并定位对应的缓存文件
      * @return RiskMatrixLoader 风险矩阵加载器函数
      */
-    fun createRiskMatrixLoader(): RiskMatrixLoader {
-        return buildRiskMatrixLoaderFromRepository(
-            repo = repo,
-            endpoint = "risk-matrix",
-            fileIds = listOf("default")
-        )
+    fun createRiskMatrixLoader(projectName: String): RiskMatrixLoader {
+        return suspend {
+            try {
+                // 通过项目名称获取项目UID
+                val project = projectDao.getByExactName(projectName)
+                val projectUid = project?.projectUid
+                
+                if (projectUid.isNullOrBlank()) {
+                    Log.w("EventFormVM", "Project UID not found for project: $projectName, falling back to remote")
+                    // 如果无法获取项目UID，回退到远程加载
+                    buildRiskMatrixLoaderFromRepository(
+                        repo = repo,
+                        endpoint = "risk-matrix",
+                        fileIds = listOf("default")
+                    ).invoke()
+                } else {
+                    // 优先使用本地缓存加载器
+                    buildRiskMatrixLoaderFromLocalCache(
+                        projectDigitalAssetDao = projectDigitalAssetDao,
+                        projectUid = projectUid
+                    ).invoke()
+                }
+            } catch (e: Exception) {
+                Log.e("EventFormVM", "Failed to create risk matrix loader for project $projectName: ${e.message}", e)
+                // 出现异常时回退到远程加载
+                buildRiskMatrixLoaderFromRepository(
+                    repo = repo,
+                    endpoint = "risk-matrix",
+                    fileIds = listOf("default")
+                ).invoke()
+            }
+        }
     }
 
     /**

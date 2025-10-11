@@ -971,7 +971,7 @@ import android.util.Log
                 showRiskDialog = false
                 if (r != null) riskResult = r
             },
-            loader = viewModel.createRiskMatrixLoader(),
+            loader = viewModel.createRiskMatrixLoader(projectName),
             initialAnswers = riskResult?.answers
         )
     }
@@ -1148,7 +1148,7 @@ private fun DefectInfoCard(
                 dir.listFiles()
                     ?.sortedBy { it.name }
                     ?.map { it.absolutePath }
-                    ?.take(3) // 最多显示3张图片
+                    // 移除 .take(3) 限制，支持显示所有图片并左右滑动查看
                     ?: emptyList()
             } else emptyList()
         } else emptyList()

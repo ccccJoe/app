@@ -11,6 +11,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import dagger.assisted.AssistedFactory
 import com.simsapp.domain.usecase.SyncUseCase
 
 /**
@@ -24,6 +25,11 @@ class SyncWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val syncUseCase: SyncUseCase
 ) : CoroutineWorker(appContext, params) {
+
+    @AssistedFactory
+    interface Factory {
+        fun create(appContext: Context, params: WorkerParameters): SyncWorker
+    }
 
     /**
      * Do background sync work with progress hooks.

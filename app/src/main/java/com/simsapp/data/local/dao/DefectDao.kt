@@ -36,6 +36,10 @@ interface DefectDao {
     @Query("DELETE FROM defect WHERE defect_id = :id")
     suspend fun deleteById(id: Long)
 
+    /** Delete all defects for a project by project_id. */
+    @Query("DELETE FROM defect WHERE project_id = :projectId")
+    suspend fun deleteByProjectId(projectId: Long)
+
     /** Get all defects for a project by project_id. */
     @Query("SELECT * FROM defect WHERE project_id = :projectId ORDER BY defect_no ASC")
     fun getByProject(projectId: Long): Flow<List<DefectEntity>>

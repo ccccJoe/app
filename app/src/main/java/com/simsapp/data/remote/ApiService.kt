@@ -64,7 +64,7 @@ interface ApiService {
 
     /**
      * 动态获取项目列表（绝对地址）。
-     * 示例：GET https://sims.ink-stone.win/zuul/sims-master/app/project/project_list
+     * 示例：GET https://sims.ink-stone.win/zuul/sims-ym/app/project/project_list
      * 可选头：X-USERNAME、Authorization（由拦截器统一注入；如需覆盖可显式传入）。
      * @param endpoint 绝对地址（包含 https 前缀）
      * @param username 可空：覆盖默认的 X-USERNAME
@@ -80,7 +80,7 @@ interface ApiService {
 
     /**
      * 动态获取项目详情（绝对地址）。
-     * 示例：GET https://sims.ink-stone.win/zuul/sims-master/app/project/project?project_uid=xxx
+     * 示例：GET https://sims.ink-stone.win/zuul/sims-ym/app/project/project?project_uid=xxx
      * @param endpoint 完整绝对地址（不含查询参数）
      * @param projectUid 查询参数 project_uid
      * @param username 可空：覆盖默认的 X-USERNAME
@@ -116,7 +116,7 @@ interface ApiService {
      * Resolve a temporary download url for risk matrix config by posting file id list.
      * Using @Url to allow full absolute endpoint independent of baseUrl.
      *
-     * @param endpoint Full absolute url like "https://sims.ink-stone.win/zuul/sims-master/storage/download/url"
+     * @param endpoint Full absolute url like "https://sims.ink-stone.win/zuul/sims-ym/storage/download/url"
      * @param fileIds  The request body as a JSON array of file id strings (from screenshot parameter)
      */
     @POST
@@ -129,5 +129,7 @@ interface ApiService {
      * Download risk matrix json using a dynamic url returned by resolveDownloadUrl.
      */
     @GET
-    suspend fun downloadRiskMatrix(@Url fileUrl: String): Response<ResponseBody>
+    suspend fun downloadRiskMatrixByUrl(@Url fileUrl: String): Response<ResponseBody>
+
+
 }

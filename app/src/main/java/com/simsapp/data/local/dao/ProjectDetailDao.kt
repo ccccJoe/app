@@ -54,4 +54,8 @@ interface ProjectDetailDao {
     /** Delete all details (for full resync). */
     @Query("DELETE FROM project_detail")
     suspend fun clearAll()
+
+    /** Delete project detail by project id. */
+    @Query("DELETE FROM project_detail WHERE project_id = :projectId")
+    suspend fun deleteByProjectId(projectId: Long)
 }

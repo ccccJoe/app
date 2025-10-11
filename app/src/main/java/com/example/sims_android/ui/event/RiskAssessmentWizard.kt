@@ -443,6 +443,81 @@ fun buildRiskMatrixLoaderFromRepository(
 }
 
 /**
+ * 函数：buildRiskMatrixLoaderFromLocalCache
+ * 说明：
+ * - 从本地数字资产表中加载风险矩阵数据
+ * - 优先使用项目对应的本地缓存文件，提升加载速度和离线可用性
+ * - 以函数类型返回，供调用处直接传给 RiskAssessmentWizardDialog 的 loader 参数
+ *
+ * @param projectDigitalAssetDao ProjectDigitalAssetDao 实例（通过 Hilt 注入）
+ * @param projectUid 项目唯一标识，用于定位对应的缓存文件
+ */
+fun buildRiskMatrixLoaderFromLocalCache(
+    projectDigitalAssetDao: com.simsapp.data.local.dao.ProjectDigitalAssetDao,
+    projectUid: String
+): RiskMatrixLoader = suspend {
+    try {
+        // 从数字资产表中查找风险矩阵类型的已完成下载记录
+        val completedAssets = projectDigitalAssetDao.getCompletedByProjectUid(projectUid)
+        val riskMatrixAssets = completedAssets.filter { it.type == "risk_matrix" && it.localPath != null }
+        
+        if (riskMatrixAssets.isEmpty()) {
+            Result.failure(IllegalStateException("No risk matrix cache found for project: $projectUid"))
+        } else {
+            // 使用第一个风险矩阵缓存文件（通常项目只有一个风险矩阵配置）
+            val riskMatrixAsset = riskMatrixAssets.first()
+            val cacheFile = java.io.File(riskMatrixAsset.localPath!!)
+            
+            if (!cacheFile.exists()) {
+                Result.failure(IllegalStateException("Risk matrix cache file not found: ${riskMatrixAsset.localPath}"))
+            } else {
+                // 读取并解析缓存文件
+                val jsonContent = cacheFile.readText()
+                val gson = com.google.gson.Gson()
+                val payload = gson.fromJson(jsonContent, com.simsapp.data.repository.ProjectRepository.RiskMatrixPayload::class.java)
+                
+                // 转换为UI数据模型
+                val c = payload.consequenceData.map {
+                    ConsequenceItemUI(
+                        severityFactor = it.severityFactor,
+                        cost = it.cost,
+                        productionLoss = it.productionLoss,
+                        safety = it.safety,
+                        other = it.other
+                    )
+                }
+                val l = payload.likelihoodData.map {
+                    LikelihoodItemUI(
+                        likelihoodFactor = it.likelihoodFactor,
+                        criteria = it.criteria
+                    )
+                }
+                val p = payload.priorityData.map {
+                    PriorityItemUI(
+                        priority = it.priority,
+                        minValue = it.minValue,
+                        maxValue = it.maxValue,
+                        minInclusive = it.minInclusive,
+                        maxInclusive = it.maxInclusive
+                    )
+                }
+                
+                val riskMatrixUI = RiskMatrixUI(
+                    consequenceData = c,
+                    likelihoodData = l,
+                    priorityData = p
+                )
+                
+                Result.success(riskMatrixUI)
+            }
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("RiskMatrixLoader", "Failed to load risk matrix from local cache for project $projectUid: ${e.message}", e)
+        Result.failure(e)
+    }
+}
+
+/**
  * Composable: RiskResultBar
  * 文件级说明：用于在页面展示风险矩阵评估的结果条。
  * - 左到右依次为 P4(低)、P3(中)、P2(高)、P1(极高)，颜色由绿到红。

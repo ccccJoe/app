@@ -42,6 +42,9 @@ class DefectRepository @Inject constructor(
     /** Delete a defect by id. */
     suspend fun delete(id: Long) = dao.deleteById(id)
 
+    /** Delete all defects for a project by project_id. */
+    suspend fun deleteByProjectId(projectId: Long) = dao.deleteByProjectId(projectId)
+
     /** Update event_count for a defect by defect_id. */
     suspend fun updateEventCount(defectId: Long, eventCount: Int) = dao.updateEventCount(defectId, eventCount)
 

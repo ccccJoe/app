@@ -87,6 +87,14 @@ interface ProjectDao {
     /** 批量更新项目（仅更新变化的项目） */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateAll(projects: List<ProjectEntity>): List<Long>
+
+    /** 获取所有已完成状态的项目 */
+    @Query("SELECT * FROM project WHERE UPPER(status) = 'FINISHED' OR status = '已完成' ORDER BY name ASC")
+    fun getFinishedProjects(): Flow<List<ProjectEntity>>
+
+    /** 批量删除项目（根据项目ID列表） */
+    @Query("DELETE FROM project WHERE project_id IN (:projectIds)")
+    suspend fun deleteByIds(projectIds: List<Long>)
 }
 
 /**

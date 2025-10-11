@@ -13,11 +13,13 @@ import com.simsapp.data.local.dao.EventDao
 import com.simsapp.data.local.dao.ProjectDao
 import com.simsapp.data.local.dao.AssetDao
 import com.simsapp.data.local.dao.ProjectDetailDao
+import com.simsapp.data.local.dao.ProjectDigitalAssetDao
 import com.simsapp.data.local.entity.AssetEntity
 import com.simsapp.data.local.entity.DefectEntity
 import com.simsapp.data.local.entity.EventEntity
 import com.simsapp.data.local.entity.ProjectEntity
 import com.simsapp.data.local.entity.ProjectDetailEntity
+import com.simsapp.data.local.entity.ProjectDigitalAssetEntity
 
 /**
  * AppDatabase
@@ -25,8 +27,8 @@ import com.simsapp.data.local.entity.ProjectDetailEntity
  * Central Room database for the SIMS app.
  */
 @Database(
-    entities = [ProjectEntity::class, DefectEntity::class, EventEntity::class, AssetEntity::class, ProjectDetailEntity::class],
-    version = 7,
+    entities = [ProjectEntity::class, DefectEntity::class, EventEntity::class, AssetEntity::class, ProjectDetailEntity::class, ProjectDigitalAssetEntity::class],
+    version = 9,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -45,4 +47,7 @@ abstract class AppDatabase : RoomDatabase() {
 
     /** Provides DAO for project detail operations. */
     abstract fun projectDetailDao(): ProjectDetailDao
+
+    /** Provides DAO for project digital asset operations. */
+    abstract fun projectDigitalAssetDao(): ProjectDigitalAssetDao
 }

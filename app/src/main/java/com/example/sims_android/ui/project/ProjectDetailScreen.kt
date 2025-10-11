@@ -10,9 +10,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -25,7 +28,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -35,6 +39,20 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.border
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.itemsIndexed
+// 移除重复的导入语句
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -45,9 +63,11 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 import android.widget.Toast
+import android.util.Log
 
 // 新增用于缩略图渲染的导入
 import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.asImageBitmap
@@ -57,6 +77,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -116,7 +138,9 @@ fun ProjectDetailScreen(
     // 新增：打开项目详情页（键值信息页）的回调
     onOpenProjectInfo: () -> Unit,
     // 新增：打开缺陷详情页的回调（参数为缺陷编号 no）
-    onOpenDefect: (String) -> Unit
+    onOpenDefect: (String) -> Unit,
+    // 新增：打开缺陷排序页面的回调
+    onOpenDefectSort: (List<HistoryDefectItem>) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -142,6 +166,11 @@ fun ProjectDetailScreen(
     val projectDescription by viewModel.projectDescription.collectAsState("")
     // 新增：控制项目描述的展开/收起状态
     var isDescriptionExpanded by remember { mutableStateOf(false) }
+    
+    // 新增：控制排序对话框的显示状态
+    var showSortDialog by remember { mutableStateOf(false) }
+    // 新增：排序对话框中的缺陷列表状态（可拖拽重排序）
+    var sortableDefects by remember { mutableStateOf<List<HistoryDefectItem>>(emptyList()) }
     
     LaunchedEffect(projectUid) {
         viewModel.loadDefectsByProjectUid(projectUid)
@@ -259,21 +288,20 @@ fun ProjectDetailScreen(
                     
                     // 按钮样式匹配图片中的灰色矩形按钮
                     if (selectedTab == 0) {
-                        // Sort按钮，灰色背景，禁用状态
+                        // Sort按钮，启用点击功能
                         Button(
-                            onClick = { /* 不执行任何操作 */ },
+                            onClick = { 
+                                // 显示排序对话框
+                                showSortDialog = true
+                            },
                             modifier = Modifier
                                 .height(38.dp) // 与搜索框高度保持一致
                                 .width(60.dp), // 固定宽度
                             shape = RoundedCornerShape(4.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFE0E0E0), // 灰色背景
-                                contentColor = Color(0xFF666666), // 灰色文字
-                                disabledContainerColor = Color(0xFFE0E0E0),
-                                disabledContentColor = Color(0xFF666666)
+                                containerColor = MaterialTheme.colorScheme.primary
                             ),
-                            contentPadding = PaddingValues(0.dp),
-                            enabled = false // 禁用按钮
+                            contentPadding = PaddingValues(0.dp)
                         ) { 
                             Text(
                                 "Sort", 
@@ -381,9 +409,572 @@ fun ProjectDetailScreen(
             }
         }
     }
+    
+    // 排序对话框
+    if (showSortDialog) {
+        DefectSortDialog(
+            defects = defects,
+            onDismiss = { showSortDialog = false },
+            onConfirm = { reorderedDefects ->
+                // 更新ViewModel中的缺陷顺序
+                viewModel.updateDefectOrder(reorderedDefects)
+                showSortDialog = false
+            }
+        )
+    }
 }
 
-// 其余组件（OverviewCard、DefectList、EventList、loadLocalEvents 等）保持不变
+/**
+ * 缺陷排序对话框
+ * 使用原生 Compose 拖拽功能实现排序
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DefectSortDialog(
+    defects: List<HistoryDefectItem>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<HistoryDefectItem>) -> Unit
+) {
+    var sortableDefects by remember { mutableStateOf(defects) }
+    var draggedIndex by remember { mutableIntStateOf(-1) }
+    
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                // 标题栏
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Sort Defects",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close"
+                        )
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // 提示文本
+                Text(
+                    text = "Long press and drag to reorder defects",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // 可排序列表 - 添加拖拽预览效果
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    itemsIndexed(
+                        items = sortableDefects,
+                        key = { _, item -> item.no }
+                    ) { index, item ->
+                        // 添加拖拽目标位置指示器
+                        if (draggedIndex != -1 && index == draggedIndex) {
+                            // 拖拽占位符 - 显示拖拽目标位置
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(88.dp)
+                                    .alpha(0.3f),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                                ),
+                                border = BorderStroke(
+                                    2.dp, 
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                )
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "Drop here",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                    )
+                                }
+                            }
+                        }
+                        
+                        SimpleDraggableDefectItem(
+                            item = item,
+                            index = index,
+                            isDragging = draggedIndex == index,
+                            onDragStart = { draggedIndex = index },
+                            onDragEnd = { draggedIndex = -1 },
+                            onMove = { fromIndex, toIndex ->
+                                // 优化的实时位置交换逻辑
+                                if (fromIndex != toIndex && 
+                                    fromIndex in sortableDefects.indices && 
+                                    toIndex in sortableDefects.indices) {
+                                    
+                                    Log.d("DefectSortDialog", "位置交换: $fromIndex -> $toIndex")
+                                    
+                                    // 创建新列表并交换位置
+                                    val newList = sortableDefects.toMutableList()
+                                    
+                                    // 安全的位置交换 - 移除并插入
+                                    if (fromIndex < newList.size && toIndex < newList.size) {
+                                        val item = newList.removeAt(fromIndex)
+                                        newList.add(toIndex, item)
+                                        
+                                        // 立即更新状态，触发重组
+                                        sortableDefects = newList
+                                        
+                                        Log.d("DefectSortDialog", "交换完成，新顺序: ${newList.map { it.no }}")
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // 底部按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Cancel")
+                    }
+                    
+                    Button(
+                        onClick = { onConfirm(sortableDefects) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Confirm")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 优化的可拖拽缺陷项
+ * 实现实时拖拽位置交换和流畅的视觉反馈
+ */
+@Composable
+private fun SimpleDraggableDefectItem(
+    item: HistoryDefectItem,
+    index: Int,
+    isDragging: Boolean,
+    onDragStart: () -> Unit,
+    onDragEnd: () -> Unit,
+    onMove: (Int, Int) -> Unit
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    var isLongPressing by remember { mutableStateOf(false) }
+    var lastTargetIndex by remember { mutableIntStateOf(index) }
+    
+    // 拖拽时的视觉效果 - 增强动画效果
+    val elevation by animateDpAsState(
+        targetValue = if (isDragging) 12.dp else 2.dp,
+        animationSpec = tween(300),
+        label = "elevation"
+    )
+    
+    val alpha by animateFloatAsState(
+        targetValue = if (isDragging) 0.9f else 1f,
+        animationSpec = tween(200),
+        label = "alpha"
+    )
+    
+    val scale by animateFloatAsState(
+        targetValue = if (isDragging) 1.05f else 1f,
+        animationSpec = tween(200),
+        label = "scale"
+    )
+    
+    // 拖拽时的旋转效果
+    val rotation by animateFloatAsState(
+        targetValue = if (isDragging) 2f else 0f,
+        animationSpec = tween(200),
+        label = "rotation"
+    )
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                this.alpha = alpha
+                rotationZ = rotation
+                translationY = if (isDragging) dragOffset.y else 0f
+                // 添加阴影效果
+                shadowElevation = if (isDragging) 16.dp.toPx() else 4.dp.toPx()
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { offset ->
+                        // 长按开始拖拽
+                        isLongPressing = true
+                        lastTargetIndex = index
+                        onDragStart()
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        Log.d("DefectSortDialog", "长按开始拖拽: index=$index")
+                    }
+                )
+            }
+            .pointerInput(isLongPressing) {
+                if (isLongPressing) {
+                    // 拖拽手势
+                    detectDragGestures(
+                        onDragEnd = { 
+                            dragOffset = Offset.Zero
+                            isLongPressing = false
+                            lastTargetIndex = index
+                            onDragEnd()
+                            Log.d("DefectSortDialog", "结束拖拽")
+                        },
+                        onDrag = { change, _ ->
+                            dragOffset += change.position
+                            
+                            // 优化的实时位置计算
+                            val itemHeight = 88.dp.toPx() // 更精确的项目高度
+                            val currentOffset = dragOffset.y
+                            
+                            // 计算目标索引 - 基于累积偏移量
+                            val offsetSteps = (currentOffset / itemHeight).toInt()
+                            val targetIndex = (index + offsetSteps).coerceAtLeast(0)
+                            
+                            // 实时位置交换 - 只在目标位置改变时触发
+                            if (targetIndex != lastTargetIndex && targetIndex >= 0) {
+                                Log.d("DefectSortDialog", "实时位置交换: $lastTargetIndex -> $targetIndex, offset=$currentOffset")
+                                
+                                onMove(lastTargetIndex, targetIndex)
+                                lastTargetIndex = targetIndex
+                                
+                                // 提供触觉反馈
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                
+                                // 部分重置偏移量，保持流畅的拖拽体验
+                                dragOffset = Offset(dragOffset.x, currentOffset % itemHeight)
+                            }
+                        }
+                    )
+                }
+            },
+        elevation = CardDefaults.cardElevation(defaultElevation = elevation),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDragging) 
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            else 
+                MaterialTheme.colorScheme.surface
+        ),
+        border = if (isDragging) 
+            BorderStroke(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
+        else null
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 拖拽手柄
+            Icon(
+                imageVector = Icons.Default.DragHandle,
+                contentDescription = "Drag handle",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 12.dp)
+            )
+            
+            // 缺陷信息
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = "Defect ${item.no}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                
+                Text(
+                    text = "Risk: ${item.riskRating} | Events: ${item.eventCount}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            // 图片数量指示器
+            if (item.images.isNotEmpty()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Image,
+                        contentDescription = "Images",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "${item.images.size}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun DefectSortBottomSheet(
+    defects: List<HistoryDefectItem>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<HistoryDefectItem>) -> Unit
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
+    // 可变的缺陷列表状态，用于拖拽重排序
+    var sortableDefects by remember { mutableStateOf(defects.toMutableStateList()) }
+    
+    // 拖拽状态
+    var draggedIndex by remember { mutableStateOf(-1) }
+    var targetIndex by remember { mutableStateOf(-1) }
+    
+    @OptIn(ExperimentalMaterial3Api::class)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.fillMaxHeight()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            // 标题
+            Text(
+                text = "Sort Defects",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF333333),
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            
+            // 提示文字
+            Text(
+                text = "Long press and drag to reorder defects",
+                fontSize = 14.sp,
+                color = Color(0xFF666666),
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            
+            // 可拖拽的缺陷列表
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                itemsIndexed(
+                    items = sortableDefects,
+                    key = { _, item -> item.no }
+                ) { index, item ->
+                    DraggableDefectItem(
+                        item = item,
+                        index = index,
+                        isDragging = draggedIndex == index,
+                        onDragStart = { 
+                            draggedIndex = index
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                        },
+                        onDragEnd = {
+                            // 拖拽结束，重置状态
+                            draggedIndex = -1
+                            targetIndex = -1
+                        },
+                        onDragOver = { newTargetIndex ->
+                            // 改进的拖拽逻辑：只在目标位置有效且不同时才交换
+                            if (draggedIndex != -1 && newTargetIndex != draggedIndex && 
+                                newTargetIndex >= 0 && newTargetIndex < sortableDefects.size) {
+                                
+                                val newList = sortableDefects.toMutableList()
+                                val draggedItem = newList.removeAt(draggedIndex)
+                                newList.add(newTargetIndex, draggedItem)
+                                sortableDefects = newList.toMutableStateList()
+                                
+                                // 更新拖拽索引为新位置，这样后续的计算都基于新位置
+                                draggedIndex = newTargetIndex
+                                targetIndex = newTargetIndex
+                            }
+                        }
+                    )
+                }
+            }
+            
+            // 底部按钮
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 取消按钮
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFF666666)
+                    ),
+                    border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+                ) {
+                    Text("Cancel")
+                }
+                
+                // 确认按钮
+                Button(
+                    onClick = { onConfirm(sortableDefects.toList()) },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF1976D2)
+                    )
+                ) {
+                    Text("Confirm", color = Color.White)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 可拖拽的缺陷项组件
+ */
+@Composable
+private fun DraggableDefectItem(
+    item: HistoryDefectItem,
+    index: Int,
+    isDragging: Boolean,
+    onDragStart: () -> Unit,
+    onDragEnd: () -> Unit,
+    onDragOver: (Int) -> Unit
+) {
+    val hapticFeedback = LocalHapticFeedback.current
+    
+    // 拖拽时的缩放动画
+    val scale by animateFloatAsState(
+        targetValue = if (isDragging) 1.05f else 1f,
+        animationSpec = tween(durationMillis = 150),
+        label = "drag_scale"
+    )
+    
+    // 拖拽时的透明度动画
+    val alpha by animateFloatAsState(
+        targetValue = if (isDragging) 0.8f else 1f,
+        animationSpec = tween(durationMillis = 150),
+        label = "drag_alpha"
+    )
+    
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                this.alpha = alpha
+                translationY = if (isDragging) dragOffset.y else 0f
+            }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        dragOffset = Offset.Zero
+                        onDragStart()
+                        hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                    },
+                    onDragEnd = { 
+                        dragOffset = Offset.Zero
+                        onDragEnd()
+                    },
+                    onDrag = { _, dragAmount ->
+                        dragOffset += dragAmount
+                        
+                        // 改进的拖拽逻辑：基于累积偏移量计算目标位置
+                        val itemHeight = 80.dp.toPx()
+                        val moveThreshold = itemHeight * 0.5f // 降低阈值，提高响应性
+                        
+                        // 计算应该移动到的目标位置
+                        val offsetSteps = (dragOffset.y / moveThreshold).toInt()
+                        val newIndex = index + offsetSteps
+                        
+                        // 确保目标索引在有效范围内
+                        if (newIndex != index && newIndex >= 0) {
+                            onDragOver(newIndex)
+                            // 不重置dragOffset，保持累积效果
+                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                    }
+                )
+            },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDragging) Color(0xFFF0F0F0) else Color.White
+        ),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (isDragging) 8.dp else 2.dp
+        )
+    ) {
+        // 参照历史defect列表的标题布局：缺陷编号和风险等级标签
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 缺陷编号文本
+            Text(
+                text = "No.${item.no}",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color(0xFF222222),
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            
+            // 风险等级标签
+            if (item.riskRating.isNotBlank()) {
+                RiskLevelTag(
+                    riskLevel = item.riskRating,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+    }
+}
 
 /**
  * Composable entry for Project Detail Screen.
@@ -412,7 +1003,8 @@ fun ProjectDetailScreenLegacy(
         onOpenEvent = onOpenEvent,
         onOpenProjectInfo = {},
         onOpenDefect = {},
-        onCreateEventForDefect = { _ -> onCreateEvent() }
+        onCreateEventForDefect = { _ -> onCreateEvent() },
+        onOpenDefectSort = { _ -> } // 空实现，因为Legacy版本不支持排序
     )
 }
 
@@ -460,7 +1052,7 @@ private fun OverviewCard(
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            // 描述信息：使用project_description，支持展开/收起
+            // 描述信息：使用project_description，支持展开/收起状态
             // 过滤null值，将null视为空内容
             val validDescription = if (projectDescription == "null" || projectDescription.isBlank()) "" else projectDescription
             
