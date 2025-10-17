@@ -30,7 +30,7 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["project_id"]),
         Index(value = ["project_uid"])
-    ],
+    ]
 )
 data class EventEntity(
     /** Primary key of the event (auto-generated). */
@@ -49,8 +49,8 @@ data class EventEntity(
     @ColumnInfo(name = "content") val content: String = "",
     /** Last edit timestamp in epoch millis. */
     @ColumnInfo(name = "last_edit_time") val lastEditTime: Long = System.currentTimeMillis(),
-    /** Asset file paths as JSON list via TypeConverters. */
-    @ColumnInfo(name = "assets") val assets: List<String> = emptyList(),
+    /** Digital assets with file ID and name as JSON list via TypeConverters. */
+    @ColumnInfo(name = "assets") val assets: List<DigitalAssetItem> = emptyList(),
     /** Risk assessment level (e.g., "High", "Medium", "Low"). */
     @ColumnInfo(name = "risk_level") val riskLevel: String? = null,
     /** Risk assessment score. */

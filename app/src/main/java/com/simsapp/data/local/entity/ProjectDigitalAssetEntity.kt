@@ -21,10 +21,10 @@ import com.simsapp.data.local.entity.ProjectEntity
 @Entity(
     tableName = "project_digital_asset",
     indices = [
-        Index(value = ["project_uid"]),
+        Index(value = ["project_uids"]),
         Index(value = ["node_id"], unique = true),
         Index(value = ["parent_id"]),
-        Index(value = ["file_id"])
+        Index(value = ["file_id"], unique = true) // file_id改为唯一索引，避免重复下载
     ]
 )
 data class ProjectDigitalAssetEntity(
@@ -33,9 +33,9 @@ data class ProjectDigitalAssetEntity(
     @ColumnInfo(name = "id") 
     val id: Long = 0,
     
-    /** Project UID for reference. */
-    @ColumnInfo(name = "project_uid") 
-    val projectUid: String,
+    /** Project UIDs array stored as JSON string. */
+    @ColumnInfo(name = "project_uids") 
+    val projectUids: String, // JSON数组: ["uid1", "uid2"]
     
     /** Node ID from project_digital_asset_tree. */
     @ColumnInfo(name = "node_id") 

@@ -56,7 +56,7 @@ class RiskMatrixRepository @Inject constructor(
     suspend fun processRiskMatrixData(projectUid: String, digitalAssets: List<ProjectDigitalAssetEntity>): Result<Int> {
         return try {
             // 筛选风险矩阵节点
-            val riskMatrixAssets = digitalAssets.filter { it.type == "risk_matrix" }
+        val riskMatrixAssets = digitalAssets.filter { it.type == "risk_matrix" }
             
             if (riskMatrixAssets.isEmpty()) {
                 Log.d(TAG, "No risk matrix assets found for project: $projectUid")
@@ -399,8 +399,7 @@ class RiskMatrixRepository @Inject constructor(
     ) {
         try {
             // 根据fileId查找对应的数字资产记录
-            val assets = projectDigitalAssetDao.getByFileId(fileId)
-            val projectAsset = assets.find { it.projectUid == projectUid }
+            val projectAsset = projectDigitalAssetDao.getByFileId(fileId)
             
             if (projectAsset != null) {
                 // 更新下载状态

@@ -5,6 +5,7 @@
  */
 package com.simsapp.data.local.dao
 
+import android.util.Log
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -87,6 +88,26 @@ interface ProjectDao {
     /** 批量更新项目（仅更新变化的项目） */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateAll(projects: List<ProjectEntity>): List<Long>
+    
+    /** 
+     * 安全更新项目信息，避免级联删除关联的events和defects
+     * 对于已存在的项目，使用UPDATE而不是REPLACE，保护外键关联数据
+     */
+    suspend fun safeUpdateProjects(projects: List<ProjectEntity>) {
+        for (project in projects) {
+            val existingProject = getByUid(project.projectUid)
+            if (existingProject != null) {
+                // 项目已存在，使用UPDATE更新字段，保留project_id不变
+                val updatedProject = project.copy(projectId = existingProject.projectId)
+                Log.d("ProjectDao", "Updating existing project: ${project.projectUid}, preserving project_id: ${existingProject.projectId}")
+                update(updatedProject)
+            } else {
+                // 新项目，直接插入
+                Log.d("ProjectDao", "Inserting new project: ${project.projectUid}")
+                insert(project)
+            }
+        }
+    }
 
     /** 获取所有已完成状态的项目 */
     @Query("SELECT * FROM project WHERE UPPER(status) = 'FINISHED' OR status = '已完成' ORDER BY name ASC")

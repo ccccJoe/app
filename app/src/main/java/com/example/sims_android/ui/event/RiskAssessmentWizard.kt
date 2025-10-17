@@ -459,10 +459,10 @@ fun buildRiskMatrixLoaderFromLocalCache(
     try {
         // 从数字资产表中查找风险矩阵类型的已完成下载记录
         val completedAssets = projectDigitalAssetDao.getCompletedByProjectUid(projectUid)
-        val riskMatrixAssets = completedAssets.filter { it.type == "risk_matrix" && it.localPath != null }
+        val riskMatrixAssets = completedAssets.filter { it.type == "RISK_MATRIX" && it.localPath != null }
         
         if (riskMatrixAssets.isEmpty()) {
-            Result.failure(IllegalStateException("No risk matrix cache found for project: $projectUid"))
+            Result.failure(IllegalStateException("No risk matrix available for current project"))
         } else {
             // 使用第一个风险矩阵缓存文件（通常项目只有一个风险矩阵配置）
             val riskMatrixAsset = riskMatrixAssets.first()

@@ -61,7 +61,7 @@ class RiskMatrixRepositoryTest {
         val projectUid = "test_project_123"
         val riskMatrixAsset = ProjectDigitalAssetEntity(
             id = 1L,
-            projectUid = projectUid,
+            projectUids = "[\"$projectUid\"]",
             nodeId = "risk_matrix_node_1",
             parentId = null,
             name = "risk_matrix.json",
@@ -149,7 +149,7 @@ class RiskMatrixRepositoryTest {
         val projectUid = "test_project_123"
         val normalAsset = ProjectDigitalAssetEntity(
             id = 1L,
-            projectUid = projectUid,
+            projectUids = "[\"$projectUid\"]",
             nodeId = "normal_node_1",
             parentId = null,
             name = "document.pdf",
@@ -187,7 +187,7 @@ class RiskMatrixRepositoryTest {
         val projectUid = "test_project_123"
         val cachedRiskMatrixAsset = ProjectDigitalAssetEntity(
             id = 1L,
-            projectUid = projectUid,
+            projectUids = "[\"$projectUid\"]",
             nodeId = "risk_matrix_node_1",
             parentId = null,
             name = "risk_matrix.json",

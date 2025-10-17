@@ -92,105 +92,108 @@ fun ProjectCleanupScreen(
             }
         }
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            when {
-                uiState.isLoading -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+        when {
+            uiState.isLoading -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator()
                 }
-                uiState.finishedProjects.isEmpty() -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
+            }
+            uiState.finishedProjects.isEmpty() -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "No finished projects found",
-                                style = MaterialTheme.typography.headlineSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "All projects are still in progress",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-                else -> {
-                    // Header with select all option
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        Text(
+                            text = "No finished projects found",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    ) {
-                        Row(
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "All projects are still in progress",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            else -> {
+                // Use LazyColumn as the main container
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Header with select all option as first item
+                    item {
+                        Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "${uiState.finishedProjects.size} Finished projects found",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Medium
+                                .padding(bottom = 8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
                             )
+                        ) {
                             Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Select All",
-                                    style = MaterialTheme.typography.bodyMedium
+                                    text = "${uiState.finishedProjects.size} Finished projects found",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Medium
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Checkbox(
-                                    checked = uiState.selectedProjects.size == uiState.finishedProjects.size,
-                                    onCheckedChange = { isChecked ->
-                                        if (isChecked) {
-                                            viewModel.selectAllProjects()
-                                        } else {
-                                            viewModel.clearSelection()
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Select All",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Checkbox(
+                                        checked = uiState.selectedProjects.size == uiState.finishedProjects.size,
+                                        onCheckedChange = { isChecked ->
+                                            if (isChecked) {
+                                                viewModel.selectAllProjects()
+                                            } else {
+                                                viewModel.clearSelection()
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                     }
 
-                    // Project list
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(uiState.finishedProjects) { project ->
-                            ProjectCleanupItem(
-                                project = project,
-                                isSelected = uiState.selectedProjects.contains(project.projectId),
-                                onSelectionChanged = { isSelected ->
-                                    if (isSelected) {
-                                        viewModel.selectProject(project.projectId)
-                                    } else {
-                                        viewModel.deselectProject(project.projectId)
-                                    }
+                    // Project list items
+                    items(uiState.finishedProjects) { project ->
+                        ProjectCleanupItem(
+                            project = project,
+                            isSelected = uiState.selectedProjects.contains(project.projectId),
+                            onSelectionChanged = { isSelected ->
+                                if (isSelected) {
+                                    viewModel.selectProject(project.projectId)
+                                } else {
+                                    viewModel.deselectProject(project.projectId)
                                 }
-                            )
-                        }
+                            }
+                        )
                     }
                 }
             }

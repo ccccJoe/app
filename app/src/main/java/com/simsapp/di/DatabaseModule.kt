@@ -184,6 +184,135 @@ object DatabaseModule {
     }
 
     /**
+     * Migration from version 9 to 10.
+     * 
+     * Adds digital_asset_file_ids field to event table for storing selected digital asset file IDs.
+     */
+    private val MIGRATION_9_10 = object : Migration(9, 10) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Add digital_asset_file_ids column to event table
+            database.execSQL("ALTER TABLE event ADD COLUMN digital_asset_file_ids TEXT NOT NULL DEFAULT '[]'")
+        }
+    }
+
+    /**
+     * Migration from version 10 to 11.
+     * 
+     * Removes digital_asset_file_ids field and modifies assets field to store DigitalAssetItem objects.
+     */
+    private val MIGRATION_10_11 = object : Migration(10, 11) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Create new event table with updated schema
+            database.execSQL("""
+                CREATE TABLE event_new (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    project_id INTEGER NOT NULL,
+                    project_uid TEXT NOT NULL DEFAULT '',
+                    defect_ids TEXT NOT NULL DEFAULT '[]',
+                    defect_nos TEXT NOT NULL DEFAULT '[]',
+                    location TEXT,
+                    content TEXT NOT NULL DEFAULT '',
+                    last_edit_time INTEGER NOT NULL DEFAULT 0,
+                    assets TEXT NOT NULL DEFAULT '[]',
+                    risk_level TEXT,
+                    risk_score REAL,
+                    risk_answers TEXT,
+                    photo_files TEXT NOT NULL DEFAULT '[]',
+                    audio_files TEXT NOT NULL DEFAULT '[]',
+                    is_draft INTEGER NOT NULL DEFAULT 1,
+                    FOREIGN KEY(project_id) REFERENCES project(project_id) ON DELETE CASCADE
+                )
+            """)
+            
+            // Copy data from old table to new table, converting digital_asset_file_ids to assets format
+            database.execSQL("""
+                INSERT INTO event_new (
+                    event_id, project_id, project_uid, defect_ids, defect_nos, location, content,
+                    last_edit_time, assets, risk_level, risk_score, risk_answers, photo_files, audio_files, is_draft
+                )
+                SELECT 
+                    event_id, project_id, project_uid, defect_ids, defect_nos, location, content,
+                    last_edit_time, 
+                    CASE 
+                        WHEN digital_asset_file_ids IS NOT NULL AND digital_asset_file_ids != '[]' AND digital_asset_file_ids != '' 
+                        THEN digital_asset_file_ids 
+                        ELSE '[]' 
+                    END as assets, 
+                    risk_level, risk_score, risk_answers, photo_files, audio_files, is_draft
+                FROM event
+            """)
+            
+            // Drop old table and rename new table
+            database.execSQL("DROP TABLE event")
+            database.execSQL("ALTER TABLE event_new RENAME TO event")
+            
+            // Recreate indices
+            database.execSQL("CREATE INDEX index_event_project_id ON event(project_id)")
+            database.execSQL("CREATE INDEX index_event_project_uid ON event(project_uid)")
+        }
+    }
+
+    /** Migration: v11 -> v12, add digital asset file_id field. */
+    private val MIGRATION_11_12 = object : Migration(11, 12) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Add file_id column to project_digital_asset table
+            database.execSQL("ALTER TABLE project_digital_asset ADD COLUMN file_id TEXT")
+            
+            // Create index for file_id
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_project_digital_asset_file_id ON project_digital_asset (file_id)")
+        }
+    }
+    
+    /** Migration: v12 -> v13, adjust project_digital_asset table structure for multi-project support. */
+    private val MIGRATION_12_13 = object : Migration(12, 13) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 1. 创建新的project_digital_asset表，将project_uid改为project_uids
+            database.execSQL("""
+                CREATE TABLE IF NOT EXISTS project_digital_asset_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    project_uids TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    parent_id TEXT,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    file_id TEXT,
+                    file_size INTEGER,
+                    download_url TEXT,
+                    local_path TEXT,
+                    download_status TEXT NOT NULL DEFAULT 'PENDING',
+                    content TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+            """.trimIndent())
+            
+            // 2. 迁移数据：将project_uid转换为project_uids JSON数组
+            database.execSQL("""
+                INSERT INTO project_digital_asset_new (
+                    id, project_uids, node_id, parent_id, name, type, file_id, file_size,
+                    download_url, local_path, download_status, content, created_at, updated_at
+                )
+                SELECT 
+                    id, 
+                    '["' || project_uid || '"]' as project_uids,
+                    node_id, parent_id, name, type, file_id, file_size,
+                    download_url, local_path, download_status, content, created_at, updated_at
+                FROM project_digital_asset
+            """.trimIndent())
+            
+            // 3. 删除旧表并重命名新表
+            database.execSQL("DROP TABLE project_digital_asset")
+            database.execSQL("ALTER TABLE project_digital_asset_new RENAME TO project_digital_asset")
+            
+            // 4. 重建索引
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_project_digital_asset_project_uids ON project_digital_asset (project_uids)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_project_digital_asset_node_id ON project_digital_asset (node_id)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_project_digital_asset_parent_id ON project_digital_asset (parent_id)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_project_digital_asset_file_id ON project_digital_asset (file_id)")
+        }
+    }
+
+    /**
      * Provide the Room database instance.
      *
      * - 在 DEBUG 构建下启用 fallbackToDestructiveMigration 以避免历史版本迁移缺失导致的启动崩溃。
@@ -193,11 +322,9 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "sims.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
-            // 仅调试构建启用破坏性迁移，避免老设备上的历史 DB 版本导致崩溃
-            .apply {
-                if (com.simsapp.BuildConfig.DEBUG) fallbackToDestructiveMigration()
-            }
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+            // 临时启用破坏性迁移来解决KSP编译问题
+            .fallbackToDestructiveMigration()
             .build()
 
     /** Provide ProjectDao. */

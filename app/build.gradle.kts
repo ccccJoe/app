@@ -74,6 +74,8 @@ kotlin {
 // Configure KSP arguments for Room schema generation
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental", "true")
+    arg("room.expandProjection", "true")
 }
 
 dependencies {
@@ -119,6 +121,9 @@ dependencies {
     // Coroutines
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)
+
+    // Coil image loading
+    implementation(libs.coil.compose)
 
     // 移除 ComposeReorderable 库依赖
     // implementation("org.burnoutcrew.composereorderable:reorderable:0.9.6")

@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.simsapp.ui.common.PieChart
 import com.simsapp.ui.common.BarChart
 import java.text.SimpleDateFormat
@@ -354,77 +356,83 @@ private fun ActionButtonsSection(
     onCleanClick: () -> Unit = {},
     isCleaning: Boolean = false
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // 同步按钮
-        Button(
-            onClick = { onSyncClick() },
-            modifier = Modifier.weight(1f),
-            enabled = !isSyncing,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF4A90E2)
-            ),
-            shape = RoundedCornerShape(8.dp)
+    val context = LocalContext.current
+    
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            if (isSyncing) {
-                CircularProgressIndicator(
+            // 同步按钮
+            Button(
+                onClick = { onSyncClick() },
+                modifier = Modifier.weight(1f),
+                enabled = !isSyncing,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF4A90E2)
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                if (isSyncing) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Sync",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isSyncing) "Syncing…" else "Sync",
                     color = Color.White,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(18.dp)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Sync",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
                 )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (isSyncing) "Syncing…" else "Sync",
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            )
+            
+            // 清理按钮：启用点击功能，导航到项目清理页面
+            Button(
+                onClick = { onCleanClick() },
+                modifier = Modifier.weight(1f),
+                enabled = !isCleaning,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFE74C3C)
+                ),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                if (isCleaning) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Clean",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (isCleaning) "Cleaning…" else "Clean",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
         
-        // 清理按钮：启用点击功能，导航到项目清理页面
-        Button(
-            onClick = { onCleanClick() },
-            modifier = Modifier.weight(1f),
-            enabled = !isCleaning,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFFE74C3C)
-            ),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            if (isCleaning) {
-                CircularProgressIndicator(
-                    color = Color.White,
-                    strokeWidth = 2.dp,
-                    modifier = Modifier.size(18.dp)
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Clean",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (isCleaning) "Cleaning…" else "Clean",
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
+
     }
 }
 

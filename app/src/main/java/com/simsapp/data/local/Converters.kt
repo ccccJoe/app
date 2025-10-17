@@ -8,6 +8,7 @@ package com.simsapp.data.local
 import androidx.room.TypeConverter
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.simsapp.data.local.entity.DigitalAssetItem
 
 /**
  * Converters
@@ -46,5 +47,20 @@ class Converters {
     fun toLongList(json: String?): List<Long>? = json?.let {
         val type = object : TypeToken<List<Long>>() {}.type
         gson.fromJson<List<Long>>(it, type)
+    }
+
+    /**
+     * Convert list of DigitalAssetItem to JSON string for storage.
+     */
+    @TypeConverter
+    fun fromDigitalAssetItemList(list: List<DigitalAssetItem>?): String? = list?.let { gson.toJson(it) }
+
+    /**
+     * Convert JSON string back to list of DigitalAssetItem.
+     */
+    @TypeConverter
+    fun toDigitalAssetItemList(json: String?): List<DigitalAssetItem>? = json?.let {
+        val type = object : TypeToken<List<DigitalAssetItem>>() {}.type
+        gson.fromJson<List<DigitalAssetItem>>(it, type)
     }
 }

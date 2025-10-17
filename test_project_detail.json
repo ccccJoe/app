@@ -1,0 +1,105 @@
+{
+    "project_uid": "test_project_001",
+    "project_digital_asset_tree": {
+        "id": 1001,
+        "resource_id": "test_project_001",
+        "tree_node_type": "Folder",
+        "name": "Test Project Root",
+        "label": "Test Project Root",
+        "level": 1,
+        "children": [
+            {
+                "id": 1002,
+                "resource_id": "null",
+                "tree_node_type": "Folder",
+                "name": "Images",
+                "label": "Images",
+                "level": 2,
+                "children": [
+                    {
+                        "id": 1003,
+                        "resource_id": "null",
+                        "tree_node_type": "Entity",
+                        "name": "Sample Image 1",
+                        "label": "Sample Image 1",
+                        "level": 3,
+                        "children": [],
+                        "deleted_flag": null,
+                        "op_flag": 0,
+                        "group_id": "1",
+                        "file_id": "img_001",
+                        "p_id": "1002"
+                    }
+                ],
+                "deleted_flag": null,
+                "op_flag": 0,
+                "group_id": "1",
+                "file_id": null,
+                "p_id": "1001"
+            },
+            {
+                "id": 1004,
+                "resource_id": "null",
+                "tree_node_type": "Folder",
+                "name": "Documents",
+                "label": "Documents",
+                "level": 2,
+                "children": [
+                    {
+                        "id": 1005,
+                        "resource_id": "null",
+                        "tree_node_type": "Entity",
+                        "name": "Report.pdf",
+                        "label": "Report.pdf",
+                        "level": 3,
+                        "children": [],
+                        "deleted_flag": null,
+                        "op_flag": 0,
+                        "group_id": "1",
+                        "file_id": "doc_001",
+                        "p_id": "1004"
+                    }
+                ],
+                "deleted_flag": null,
+                "op_flag": 0,
+                "group_id": "1",
+                "file_id": null,
+                "p_id": "1001"
+            },
+            {
+                "id": 1006,
+                "resource_id": "null",
+                "tree_node_type": "Folder",
+                "name": "Audio",
+                "label": "Audio",
+                "level": 2,
+                "children": [
+                    {
+                        "id": 1007,
+                        "resource_id": "null",
+                        "tree_node_type": "Entity",
+                        "name": "Recording 1",
+                        "label": "Recording 1",
+                        "level": 3,
+                        "children": [],
+                        "deleted_flag": null,
+                        "op_flag": 0,
+                        "group_id": "1",
+                        "file_id": "audio_001",
+                        "p_id": "1006"
+                    }
+                ],
+                "deleted_flag": null,
+                "op_flag": 0,
+                "group_id": "1",
+                "file_id": null,
+                "p_id": "1001"
+            }
+        ],
+        "deleted_flag": null,
+        "op_flag": 0,
+        "group_id": "1",
+        "file_id": null,
+        "p_id": null
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "data": [
+        {
+            "task_uid": "task_1760605105382",
+            "event_uid": "39",
+            "event_package_hash": "d620d88575f1ae84ef81a96cb278bb28d9c8a6ab5f155394f8eaa196f3a3eaef",
+            "event_package_name": "39.zip",
+            "ticket": {
+                "file_id": "c2ltcyMjMzkuemlwOjoyMDI1MTAxNjE3MDIwNTAy",
+                "accessid": "LTAI5tR6jFNbb5UaZaeB9s8c",
+                "policy": "eyJleHBpcmF0aW9uIjoiMjAyNS0xMC0xNlQwOTozMjowNS4wMjZaIiwiY29uZGl0aW9ucyI6W1siY29udGVudC1sZW5ndGgtcmFuZ2UiLDAsMTA0ODU3NjAwMF0sWyJzdGFydHMtd2l0aCIsIiRrZXkiLCJzaW1zIl1dfQ==",
+                "signature": "QOadG/52qbaY+pPUu8K76K1TrQY=",
+                "dir": "sims/",
+                "host": "sims-dev-data.oss-ap-southeast-1.aliyuncs.com",
+                "expire": "1760607125"
+            }
+        }
+    ],
+    "code": 0,
+    "message": null,
+    "success": true
+}

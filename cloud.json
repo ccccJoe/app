@@ -1,0 +1,21 @@
+{
+    "task_uid": "17243082178347290183",
+    "target_project_uid": "1976185377816293376",
+    "upload_list": [
+        {
+            "event_uid": "1",
+            "event_package_hash": "dfghdhjfhjg",
+            "event_package_name": "test_event_1.zip"
+        },
+        {
+            "event_uid": "2",
+            "event_package_hash": "gfhfghdfggdhf",
+            "event_package_name": "test_event_2.zip"
+        },
+        {
+            "event_uid": "3",
+            "event_package_hash": "sfdgsdfgsdfg",
+            "event_package_name": "test_event_3.zip"
+        }
+    ]
+}

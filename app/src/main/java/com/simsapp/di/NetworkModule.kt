@@ -56,7 +56,7 @@ object NetworkModule {
         // 2) Default Authorization header. If the request already sets Authorization, keep it.
         val defaultAuth: String? = when {
             com.simsapp.BuildConfig.DEV_AUTH_TOKEN.isNotBlank() -> "Bearer ${com.simsapp.BuildConfig.DEV_AUTH_TOKEN}"
-            com.simsapp.BuildConfig.DEBUG -> "Bearer eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzYwMDY0MzEyLCJleHAiOjE3NjAxNTA3MTJ9.E4-RSPiLw2J9lxVXuy1wT0SNYV4uo-Pz0oeZiWcltcTzuJ0OJNTppTTgNJKiei9p__Wx-yFgt10Fs3tXcQf3KQ"
+            com.simsapp.BuildConfig.DEBUG -> "Bearer eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzYwNTk2Mjg5LCJleHAiOjE3NjA2ODI2ODl9.8d0gCaBn50wl4ekb6qoyTYn6-AW40Z4h0grSxT0mfZ1Vcga-yNtLdNHtwpkHHG5-7uBDVPWlmGst-sDDFZHSKA"
             else -> null
         }
         if (original.header("Authorization") == null && !defaultAuth.isNullOrBlank()) {

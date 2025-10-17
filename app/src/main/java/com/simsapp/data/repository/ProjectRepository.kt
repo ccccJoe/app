@@ -250,8 +250,20 @@ class ProjectRepository @Inject constructor(
 
             // 仅更新需要更新的项目的基本信息，保留hash值一致项目的本地缓存数据
             if (projectsToUpdate.isNotEmpty()) {
-                projectDao.insertOrUpdateAll(projectsToUpdate)
+                // 记录更新前的events数量
+                for (project in projectsToUpdate) {
+                    val eventCount = eventRepository.getEventsByProjectUid(project.projectUid ?: "").first().size
+                    Log.d("SIMS-SYNC", "Project ${project.projectUid} has $eventCount events before update")
+                }
+                
+                projectDao.safeUpdateProjects(projectsToUpdate)
                 Log.i("SIMS-SYNC", "Updated projects basic info: ${projectsToUpdate.size}")
+                
+                // 记录更新后的events数量
+                for (project in projectsToUpdate) {
+                    val eventCount = eventRepository.getEventsByProjectUid(project.projectUid ?: "").first().size
+                    Log.d("SIMS-SYNC", "Project ${project.projectUid} has $eventCount events after update")
+                }
             }
             
             // 对于hash值一致的项目，仅更新计数器等可能变化的字段，保留其他本地缓存数据

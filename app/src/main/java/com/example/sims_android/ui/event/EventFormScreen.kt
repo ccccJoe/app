@@ -48,6 +48,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import coil.compose.AsyncImage
+import com.simsapp.ui.event.components.DigitalAssetCategorizedDisplay
+import com.simsapp.ui.event.components.AssetPreviewDialog
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -58,6 +61,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.simsapp.data.local.entity.DefectEntity
 import com.simsapp.data.local.entity.EventEntity
 import com.example.sims_android.ui.event.EventFormViewModel
+import com.example.sims_android.ui.event.DigitalAssetDetail
 import com.simsapp.ui.common.RiskTagColors
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -71,7 +75,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import android.widget.Toast
-// 新增：录音 HUD 动画相关 import
+// 新增：录音HUD 动画相关 import
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -117,18 +121,22 @@ import android.util.Log
     eventId: String = "",
      defectId: String = "",
      onBack: () -> Unit,
-     onOpenStorage: () -> Unit,
+     onOpenStorage: (String, List<String>) -> Unit, // 修改为传递projectUid和当前选中的资产fileId列表
      selectedStorage: List<String> = emptyList(),
+     selectedStorageFileIds: List<String> = emptyList(), // 恢复：使用List类型
      onOpenDefect: ((DefectEntity) -> Unit)? = null
  ) {
-     // 通过 Hilt 获取 ViewModel，提供风险矩阵加载能力
+     // 通过 Hilt 获取 ViewModel，提供风险矩阵加载能�?
      val viewModel: EventFormViewModel = hiltViewModel()
      val context = LocalContext.current
      val scope = rememberCoroutineScope()
 
+     // 新增：获取projectUid状�?
+     var projectUid by remember { mutableStateOf<String?>(null) }
+
      var location by remember { mutableStateOf("") }
      var description by remember { mutableStateOf("") }
-     // 新增：维护 Room 中草稿事件的 eventId（便于后续根据 ID 继续编辑）
+     // 新增：维�?Room 中草稿事件的 eventId（便于后续根�?ID 继续编辑�?
      var eventRoomId by remember { mutableStateOf<Long?>(null) }
      val photoFiles = remember { mutableStateListOf<File>() }
      val audioFiles = remember { mutableStateListOf<File>() }
@@ -136,9 +144,9 @@ import android.util.Log
      var isSaving by remember { mutableStateOf(false) }
      // 拍照进行中的临时文件，仅在成功回调后加入列表
      var pendingPhoto by remember { mutableStateOf<File?>(null) }
-     // 大图预览选择的照片
+     // 大图预览选择的照�?
      var largePhoto by remember { mutableStateOf<File?>(null) }
-     // 录音进行中的临时文件，录制成功后再加入列表
+     // 录音进行中的临时文件，录制成功后再加入列�?
      var pendingAudio by remember { mutableStateOf<File?>(null) }
      // 风险评估向导弹窗显示状态与结果缓存
      var showRiskDialog by remember { mutableStateOf(false) }
@@ -148,37 +156,163 @@ import android.util.Log
     // 删除状态标记，用于阻止删除后的自动保存
     var isDeleted by remember { mutableStateOf(false) }
     
-    // 新增：关联历史缺陷相关状态
+    // 新增：关联历史缺陷相关状�?
     val selectedDefects = remember { mutableStateListOf<DefectEntity>() }
     var showDefectSelectionDialog by remember { mutableStateOf(false) }
     
-    // 记录初始数据状态，用于检测数据是否发生变化
+    // 新增：数字资产选择状�?
+    var currentSelectedStorageFileIds by remember { mutableStateOf(selectedStorageFileIds) }
+    
+    // 新增：数字资产详细信息状�?
+    var digitalAssetDetails by remember { mutableStateOf<List<DigitalAssetDetail>>(emptyList()) }
+    
+    // 新增：预览对话框状�?
+    var showAssetPreview by remember { mutableStateOf(false) }
+    var previewAsset by remember { mutableStateOf<DigitalAssetDetail?>(null) }
+    
+    // 新增：数字资产文件名状态
+    var digitalAssetFileNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    
+    // 新增：监听数字资产选择变化
+    LaunchedEffect(selectedStorageFileIds) {
+        currentSelectedStorageFileIds = selectedStorageFileIds
+        android.util.Log.d("EventFormScreen", "LaunchedEffect triggered - selectedStorageFileIds: ${selectedStorageFileIds.joinToString()}")
+        android.util.Log.d("EventFormScreen", "Updated currentSelectedStorageFileIds: ${currentSelectedStorageFileIds.joinToString()}")
+        Log.d("EventFormScreen", "Digital assets updated: ${selectedStorageFileIds.size} files selected")
+        
+        // 修复：在新建模式下，首次选择数字资产时同步更新初始状态
+        // 避免触发不必要的自动保存
+        // 注释掉这部分逻辑，因为initialDigitalAssetFileIds变量已被删除
+        // if (eventId.isBlank() && initialDigitalAssetFileIds.isEmpty() && selectedStorageFileIds.isNotEmpty()) {
+        //     initialDigitalAssetFileIds = selectedStorageFileIds
+        //     Log.d("EventFormScreen", "Updated initialDigitalAssetFileIds for new event: ${initialDigitalAssetFileIds.joinToString()}")
+        // }
+        
+        // 获取文件名和详细信息 - 在协程作用域中执行suspend函数
+        try {
+            if (currentSelectedStorageFileIds.isNotEmpty()) {
+                digitalAssetFileNames = viewModel.getFileNamesByIds(currentSelectedStorageFileIds)
+                digitalAssetDetails = viewModel.getDigitalAssetDetailsByIds(currentSelectedStorageFileIds)
+                Log.d("EventFormScreen", "Successfully loaded ${digitalAssetFileNames.size} file names and ${digitalAssetDetails.size} asset details")
+            } else {
+                digitalAssetFileNames = emptyList()
+                digitalAssetDetails = emptyList()
+                Log.d("EventFormScreen", "Cleared digital asset data (empty selection)")
+            }
+        } catch (e: Exception) {
+            Log.e("EventFormScreen", "Error loading digital asset details: ${e.message}", e)
+            // 设置fallback数据，避免崩溃
+            digitalAssetFileNames = currentSelectedStorageFileIds
+            digitalAssetDetails = currentSelectedStorageFileIds.map { fileId ->
+                DigitalAssetDetail(
+                    fileId = fileId,
+                    fileName = fileId,
+                    type = "file",
+                    localPath = null
+                )
+            }
+        }
+    }
+    
+    // 记录初始数据状态，用于检测数据是否发生变�?
     var initialLocation by remember { mutableStateOf("") }
     var initialDescription by remember { mutableStateOf("") }
     var initialPhotoFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var initialAudioFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var initialRiskResult by remember { mutableStateOf<RiskAssessmentResult?>(null) }
     var initialSelectedDefects by remember { mutableStateOf<List<DefectEntity>>(emptyList()) }
-
+    var initialDigitalAssetFileIds by remember { mutableStateOf<List<String>>(emptyList()) } // 新增：数字资产初始状�?
+    
+    // 新增：监听风险矩阵评估结果和数字资产变化，触发自动保存
+    LaunchedEffect(riskResult, currentSelectedStorageFileIds) {
+        // 检测风险矩阵评估结果或数字资产是否发生变化
+        val riskResultChanged = riskResult != initialRiskResult
+        val digitalAssetsChanged = currentSelectedStorageFileIds != initialDigitalAssetFileIds
+        
+        Log.d("EventFormScreen", "Auto-save check: riskChanged=$riskResultChanged, assetsChanged=$digitalAssetsChanged")
+        Log.d("EventFormScreen", "Current assets: ${currentSelectedStorageFileIds.joinToString()}")
+        Log.d("EventFormScreen", "Initial assets: ${initialDigitalAssetFileIds.joinToString()}")
+        
+        // 修复：只要有风险评估结果变化或数字资产变化就触发自动保存
+        // 不再要求其他初始状态不为空，确保单独选择数字资产也能自动保存
+        if (riskResultChanged || digitalAssetsChanged) {
+            Log.d("EventFormScreen", "Auto-save triggered by risk result or digital assets change: riskChanged=$riskResultChanged, assetsChanged=$digitalAssetsChanged")
+            
+            // 跳过完全空白的初始化触发（所有状态都为初始值且没有实际内容）
+            val hasAnyContent = location.isNotBlank() || description.isNotBlank() || 
+                photoFiles.isNotEmpty() || audioFiles.isNotEmpty() || 
+                riskResult != null || currentSelectedStorageFileIds.isNotEmpty()
+            
+            if (hasAnyContent) {
+                // 触发自动保存
+                try {
+                    val isEditMode = eventId.isNotBlank()
+                    val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
+                    
+                    Log.d("EventFormScreen", "Executing auto-save: isEditMode=$isEditMode, currentEventId=$currentEventId")
+                    
+                    val result = viewModel.saveEventToRoom(
+                        projectName = projectName,
+                        location = location,
+                        description = description,
+                        currentEventId = currentEventId,
+                        isEditMode = isEditMode,
+                        riskResult = riskResult,
+                        photoFiles = photoFiles,
+                        audioFiles = audioFiles,
+                        selectedDefects = selectedDefects.toList(),
+                        digitalAssetFileIds = currentSelectedStorageFileIds
+                    )
+                    
+                    result.onSuccess { savedEventId ->
+                        // 更新eventRoomId以便后续编辑
+                        if (!isEditMode && eventRoomId == null) {
+                            eventRoomId = savedEventId
+                        }
+                        
+                        // 更新初始状态，避免重复保存
+                        if (riskResultChanged) {
+                            initialRiskResult = riskResult
+                        }
+                        if (digitalAssetsChanged) {
+                            initialDigitalAssetFileIds = currentSelectedStorageFileIds
+                        }
+                        
+                        Log.d("EventFormScreen", "Auto-saved event due to risk/assets change: savedEventId=$savedEventId, riskLevel=${riskResult?.level}, assetsCount=${currentSelectedStorageFileIds.size}")
+                    }.onFailure { e ->
+                        Log.e("EventFormScreen", "Failed to auto-save event due to risk/assets change: ${e.message}", e)
+                    }
+                } catch (e: Exception) {
+                    Log.e("EventFormScreen", "Exception during auto-save due to risk/assets change: ${e.message}", e)
+                }
+            } else {
+                Log.d("EventFormScreen", "Skipped auto-save: no content to save (riskChanged=$riskResultChanged, assetsChanged=$digitalAssetsChanged)")
+            }
+        } else {
+            Log.d("EventFormScreen", "Skipped auto-save: no changes detected (riskChanged=$riskResultChanged, assetsChanged=$digitalAssetsChanged)")
+        }
+    }
+    
     // 新增：页面离开时自动保存逻辑
     DisposableEffect(Unit) {
         onDispose {
-            // 页面离开时，如果有非空数据且未被删除则检查是否需要自动保存
+            // 页面离开时，如果有非空数据且未被删除则检查是否需要自动保�?
             if (!isDeleted && (location.isNotBlank() || description.isNotBlank() || photoFiles.isNotEmpty() || audioFiles.isNotEmpty() || riskResult != null)) {
-                // 检测数据是否发生变化
+                // 检测数据是否发生变�?
                 val hasDataChanged = location != initialLocation ||
                     description != initialDescription ||
                     photoFiles.map { it.absolutePath } != initialPhotoFiles.map { it.absolutePath } ||
                     audioFiles.map { it.absolutePath } != initialAudioFiles.map { it.absolutePath } ||
                     riskResult != initialRiskResult ||
-                    selectedDefects.toList() != initialSelectedDefects
+                    selectedDefects.toList() != initialSelectedDefects ||
+                        currentSelectedStorageFileIds != initialDigitalAssetFileIds // 修改：使用currentSelectedStorageFileIds进行变化检�?
                 
-                // 只有在数据确实发生变化时才进行自动保存
+                // 只有在数据确实发生变化时才进行自动保�?
                 if (hasDataChanged) {
                     // 使用runBlocking确保在页面销毁前完成保存
                     runBlocking {
                         try {
-                            // 判断是新建还是编辑模式
+                            // 判断是新建还是编辑模�?
                             val isEditMode = eventId.isNotBlank()
                             val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
                             
@@ -191,7 +325,8 @@ import android.util.Log
                                 riskResult = riskResult,
                                 photoFiles = photoFiles,
                                 audioFiles = audioFiles,
-                                selectedDefects = selectedDefects.toList()
+                                selectedDefects = selectedDefects.toList(),
+                                digitalAssetFileIds = currentSelectedStorageFileIds // 修改：使用currentSelectedStorageFileIds传递数字资产file_id列表
                             )
                             
                             result.onSuccess { savedEventId ->
@@ -210,6 +345,23 @@ import android.util.Log
         }
     }
 
+    // 新增：获取projectUid
+    LaunchedEffect(projectName) {
+        if (projectName.isNotBlank()) {
+            try {
+                val project = viewModel.projectDao.getByExactName(projectName)
+                if (project != null) {
+                    projectUid = project.projectUid
+                    Log.d("EventFormScreen", "Loaded projectUid: $projectUid for project: $projectName")
+                } else {
+                    Log.w("EventFormScreen", "Project not found: $projectName")
+                }
+            } catch (e: Exception) {
+                Log.e("EventFormScreen", "Failed to load project: ${e.message}", e)
+            }
+        }
+    }
+
     // 处理defectId参数：如果传入了defectId，自动关联该缺陷
     LaunchedEffect(defectId) {
         if (defectId.isNotBlank() && projectName.isNotBlank()) {
@@ -222,7 +374,7 @@ import android.util.Log
                         // 通过projectUid和defectNo获取缺陷实体
                         val defect = viewModel.getDefectByProjectUidAndDefectNo(projectUid, defectId)
                         if (defect != null) {
-                            // 检查是否已经关联了该缺陷
+                            // 检查是否已经关联了该缺�?
                             if (!selectedDefects.any { it.defectId == defect.defectId }) {
                                 selectedDefects.add(defect)
                                 Log.d("EventFormScreen", "Auto-associated defect: projectUid=$projectUid, defectNo=$defectId, defectId=${defect.defectId}")
@@ -242,7 +394,7 @@ import android.util.Log
         }
     }
 
-    // 进入时如果有 eventId，则从数据库加载事件数据并回显
+    // 进入时如果有 eventId，则从数据库加载事件数据并回�?
     LaunchedEffect(eventId) {
         if (eventId.isNotBlank()) {
             // 首先尝试从数据库加载事件数据
@@ -293,9 +445,26 @@ import android.util.Log
                             }
                         }
                         
-                        // 加载关联的缺陷信息
+                        // 回显数字资产选择 - 从新的assets字段中提取file_id和文件名
+                        val assetFileIds = eventEntity.assets.map { it.fileId }
+                        val assetFileNames = eventEntity.assets.map { it.fileName }
+                        
+                        android.util.Log.d("EventFormScreen", "Loading event assets - fileIds: ${assetFileIds.joinToString()}")
+                        android.util.Log.d("EventFormScreen", "Loading event assets - fileNames: ${assetFileNames.joinToString()}")
+                        
+                        currentSelectedStorageFileIds = assetFileIds
+                        // 获取数字资产详细信息
+                        val assetDetails = viewModel.getDigitalAssetDetailsByIds(assetFileIds)
+                        digitalAssetDetails = assetDetails
+                        digitalAssetFileNames = assetFileNames
+                        
+                        // 设置数字资产初始状态（参考风险矩阵模式）
+                        initialDigitalAssetFileIds = assetFileIds
+                        Log.d("EventFormScreen", "Restored digital assets: ${eventEntity.assets.size} files")
+                        
+                        // 加载关联的缺陷信�?
                         if (eventEntity.defectIds.isNotEmpty() || eventEntity.defectNos.isNotEmpty()) {
-                            // 在协程外部保存eventEntity的引用
+                            // 在协程外部保存eventEntity的引�?
                             val defectIds = eventEntity.defectIds
                             val defectNos = eventEntity.defectNos
                             val projectUid = eventEntity.projectUid
@@ -312,7 +481,7 @@ import android.util.Log
                                         }
                                     }
                                     
-                                    // 通过defectNos加载缺陷（如果有projectUid）
+                                    // 通过defectNos加载缺陷（如果有projectUid�?
                                     if (projectUid.isNotBlank()) {
                                         defectNos.forEach { defectNo: String ->
                                             val defect = viewModel.getDefectByProjectUidAndDefectNo(projectUid, defectNo)
@@ -333,32 +502,42 @@ import android.util.Log
                         }
                         
                         Log.d("EventFormScreen", "Loaded complete event from database: eventId=$eventIdLong, location=$location, " +
-                            "descLen=${description.length}, riskLevel=${eventEntity.riskLevel}, photoCount=${photoFiles.size}, audioCount=${audioFiles.size}")
+                            "descLen=${description.length}, riskLevel=${eventEntity.riskLevel}, photoCount=${photoFiles.size}, audioCount=${audioFiles.size}, " +
+                            "digitalAssetCount=${eventEntity.assets.size}")
+                        
+                        // 设置初始状态，用于检测数据变�?
+                        initialLocation = location
+                        initialDescription = description
+                        initialPhotoFiles = photoFiles.toList()
+                        initialAudioFiles = audioFiles.toList()
+                        initialRiskResult = riskResult
+                        initialSelectedDefects = selectedDefects.toList()
+                        initialDigitalAssetFileIds = eventEntity.assets.map { it.fileId } // 新增：设置数字资产初始状�?
                     }
                 }.onFailure { e: Throwable ->
                     Log.e("EventFormScreen", "Failed to load event from database: ${e.message}", e)
                 }
             }
             
-            // 然后尝试从本地文件系统加载额外数据（如风险评估、图片、音频等）
-            // 注意：优先使用数据库中的数据，只有在数据库中没有时才从文件系统加载
+            // 然后尝试从本地文件系统加载额外数据（如风险评估、图片、音频等�?
+            // 注意：优先使用数据库中的数据，只有在数据库中没有时才从文件系统加�?
             val baseDir = File(context.filesDir, "events")
             val eventDir = File(baseDir, eventId)
             val meta = File(eventDir, "meta.json")
             if (meta.exists()) {
                 runCatching {
                     val obj = org.json.JSONObject(meta.readText())
-                    // 如果数据库中没有location和description，则从meta.json中读取
+                    // 如果数据库中没有location和description，则从meta.json中读�?
                     if (location.isBlank()) location = obj.optString("location", "")
                     if (description.isBlank()) description = obj.optString("description", "")
                     
-                    // 如果数据库中没有风险评估结果，则从meta.json中读取
+                    // 如果数据库中没有风险评估结果，则从meta.json中读�?
                     if (riskResult == null) {
                         val riskObj = obj.optJSONObject("risk")
                         if (riskObj != null) {
                             val level = riskObj.optString("priority", "")
                             val score = riskObj.optDouble("score", 0.0)
-                            // 解析 answers（如不存在则为 null）
+                            // 解析 answers（如不存在则�?null�?
                             val answersArr = riskObj.optJSONArray("answers")
                             val answers = if (answersArr != null) {
                                 val list = mutableListOf<RiskAnswer>()
@@ -380,7 +559,7 @@ import android.util.Log
                         }
                     }
                     
-                    // 如果数据库中没有图片和音频文件，则从meta.json中读取
+                    // 如果数据库中没有图片和音频文件，则从meta.json中读�?
                     if (photoFiles.isEmpty()) {
                         val photos = obj.optJSONArray("photos")
                         if (photos != null) {
@@ -406,18 +585,34 @@ import android.util.Log
                             }
                         }
                     }
+                    
+                    // 如果数据库中没有数字资产，则从meta.json中读�?
+                    if (currentSelectedStorageFileIds.isEmpty()) {
+                        val digitalAssets = obj.optJSONArray("digitalAssets")
+                        if (digitalAssets != null) {
+                            val fileIds = mutableListOf<String>()
+                            for (i in 0 until digitalAssets.length()) {
+                                val fileId = digitalAssets.optString(i)
+                                if (fileId.isNotBlank()) {
+                                    fileIds.add(fileId)
+                                }
+                            }
+                            currentSelectedStorageFileIds = fileIds
+                        }
+                    }
                 }.onFailure { e ->
                     Log.e("EventFormScreen", "Failed to load event metadata from file: ${e.message}", e)
                 }
             }
             
-            // 数据加载完成后，更新初始状态用于后续变化检测
+            // 数据加载完成后，更新初始状态用于后续变化检�?
             initialLocation = location
             initialDescription = description
             initialPhotoFiles = photoFiles.toList()
             initialAudioFiles = audioFiles.toList()
             initialRiskResult = riskResult
             initialSelectedDefects = selectedDefects.toList()
+            initialDigitalAssetFileIds = currentSelectedStorageFileIds // 修改：使用currentSelectedStorageFileIds设置数字资产初始状�?
         }
     }
 
@@ -441,7 +636,7 @@ import android.util.Log
         } else action()
     }
 
-    // 新增：权限快速判断（避免长按期间弹窗导致逻辑错乱）
+    // 新增：权限快速判断（避免长按期间弹窗导致逻辑错乱�?
     fun hasPermission(perm: String): Boolean {
         return ContextCompat.checkSelfPermission(context, perm) == android.content.pm.PackageManager.PERMISSION_GRANTED
     }
@@ -482,11 +677,11 @@ import android.util.Log
 
     // Recorder instance retained in state
     var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
-    // 录音音量级别（0f..1f），用于驱动底部波浪动画
+    // 录音音量级别�?f..1f），用于驱动底部波浪动画
     var voiceLevel by remember { mutableStateOf(0f) }
 
     /**
-     * 开始录音
+     * 开始录�?
      */
     var recordStartTime by remember { mutableStateOf(0L) }
     fun startRecording() {
@@ -523,7 +718,7 @@ import android.util.Log
     
         // 回退方案：AMR_NB + THREE_GPP（兼容性更好，但音质较低）
         try {
-            // 删除无效的 m4a 文件
+            // 删除无效�?m4a 文件
             try { f.delete() } catch (_: Exception) {}
             f = createTempFile("AUDIO", ".3gp")
             pendingAudio = f
@@ -543,21 +738,21 @@ import android.util.Log
             try { recorder?.reset(); recorder?.release() } catch (_: Exception) {}
             recorder = null
             isRecording = false
-            // 失败则丢弃临时文件
+            // 失败则丢弃临时文�?
             try { pendingAudio?.delete() } catch (_: Exception) {}
             pendingAudio = null
         }
     }
 
     /**
-     * 停止录音并释放资源
+     * 停止录音并释放资�?
      */
     fun stopRecording() {
         Log.i("EventForm", "stopRecording: begin")
         val r = recorder
         if (r != null) {
             try {
-                // 某些设备要求至少录制数百毫秒，否则 stop 可能抛异常或导致 native 崩溃
+                // 某些设备要求至少录制数百毫秒，否�?stop 可能抛异常或导致 native 崩溃
                 val elapsed = System.currentTimeMillis() - recordStartTime
                 if (elapsed < 400) {
                     try { Thread.sleep(400 - elapsed) } catch (_: Exception) {}
@@ -587,7 +782,7 @@ import android.util.Log
     LaunchedEffect(isRecording) {
         while (isRecording) {
             val amp = try { recorder?.getMaxAmplitude() ?: 0 } catch (_: Exception) { 0 }
-            // 将 0..32767 的幅度归一化到 0..1，并做指数平滑以避免跳变
+            // �?0..32767 的幅度归一化到 0..1，并做指数平滑以避免跳变
             val normalized = (amp / 4000f).coerceIn(0f, 1f)
             voiceLevel = (voiceLevel * 0.7f + normalized * 0.3f).coerceIn(0f, 1f)
             kotlinx.coroutines.delay(60)
@@ -604,10 +799,10 @@ import android.util.Log
 
     val title = remember(projectName) { if (projectName.isNotBlank()) "New Event - $projectName" else "New Event" }
     
-    // 新增：离开页面确认弹窗状态
+    // 新增：离开页面确认弹窗状�?
     var showExitConfirmDialog by remember { mutableStateOf(false) }
     
-    // 新增：检查是否需要显示离开确认弹窗的函数
+    // 新增：检查是否需要显示离开确认弹窗的函�?
     val shouldShowExitConfirm = {
         // 检查是否没有关联任何defect且有其他内容
         selectedDefects.isEmpty() && (location.isNotBlank() || description.isNotBlank() || photoFiles.isNotEmpty() || audioFiles.isNotEmpty() || riskResult != null)
@@ -622,7 +817,7 @@ import android.util.Log
         }
     }
 
-    // 添加BackHandler来处理系统返回按钮
+    // 添加BackHandler来处理系统返回按�?
     BackHandler {
         handleBackPress()
     }
@@ -685,17 +880,25 @@ import android.util.Log
                             .clickable { showRiskDialog = true },
                         contentAlignment = Alignment.Center
                     ) {
-                        // 自定义风险图标加大尺寸
+                        // 自定义风险图标加大尺�?
                         RiskAssessmentIcon(size = 36.dp)
                     }
                 
-                    // 数据库图标：点击后进入“数据库文件展示区”的文件选择器
+                    // 数据库图标：点击后进入“数据库文件展示区”的文件选择�?
                     Box(
                         modifier = Modifier
                             .size(56.dp)
                             .clip(CircleShape)
                             .background(Color(0xFFE3F2FD), CircleShape)
-                            .clickable { onOpenStorage() },
+                            .clickable { 
+                                projectUid?.let { uid ->
+                                    // 传递当前选中的数字资产fileId列表用于精确回显
+                                    android.util.Log.d("EventFormScreen", "打开数字资产选择页面，传递fileIds: ${currentSelectedStorageFileIds.joinToString()}")
+                                    onOpenStorage(uid, currentSelectedStorageFileIds)
+                                } ?: run {
+                                    Log.w("EventFormScreen", "ProjectUid not available for storage access")
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -725,7 +928,7 @@ import android.util.Log
                         )
                     }
                 
-                    // 录音图标：长按开始录音，松开停止；仅图标不显示文字
+                    // 录音图标：长按开始录音，松开停止；仅图标不显示文�?
                     val micCircleModifier = Modifier
                         .size(56.dp)
                         .clip(CircleShape)
@@ -778,13 +981,18 @@ import android.util.Log
                     Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                         Text(text = "Database Files", fontWeight = FontWeight.SemiBold)
                         HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
-                        if (selectedStorage.isNotEmpty()) {
+                        if (digitalAssetDetails.isNotEmpty()) {
                             Spacer(Modifier.height(8.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                selectedStorage.forEach { name ->
-                                    Text(text = name, fontSize = 13.sp, color = Color(0xFF37474F))
+                            DigitalAssetCategorizedDisplay(
+                                assets = digitalAssetDetails,
+                                onAssetClick = { asset ->
+                                    // 只有非RISK_MATRIX类型的资产才能预�?
+                                    if (asset.type != "RISK_MATRIX") {
+                                        previewAsset = asset
+                                        showAssetPreview = true
+                                    }
                                 }
-                            }
+                            )
                         } else {
                             Spacer(Modifier.height(8.dp))
                             Text(text = "No files selected", fontSize = 13.sp, color = Color(0xFF90A4AE))
@@ -826,7 +1034,7 @@ import android.util.Log
 
                 Spacer(Modifier.height(12.dp))
 
-                // 录音文件展示区卡片
+                // 录音文件展示区卡�?
                 Card(
                     shape = RoundedCornerShape(10.dp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -922,27 +1130,40 @@ import android.util.Log
                             if (isSaving) return@Button
                             isSaving = true
                             scope.launch {
-                                // Button: Upload to cloud only, no local save
+                                // Enhanced sync to cloud with auto-save and polling
                                 val uid = eventId
                                 if (uid.isBlank()) {
                                     Toast.makeText(context, "Please generate event UID first (save locally then retry)", Toast.LENGTH_SHORT).show()
                                     isSaving = false
                                     return@launch
                                 }
-                                val (ok, msg) = viewModel.uploadEvent(uid)
+                                
+                                // 使用增强的同步上传功能
+                                val (ok, msg) = viewModel.uploadEventWithSync(
+                                    eventUid = uid,
+                                    projectName = projectName,
+                                    location = location,
+                                    description = description,
+                                    riskResult = riskResult,
+                                    photoFiles = photoFiles,
+                                    audioFiles = audioFiles,
+                                    selectedDefects = selectedDefects,
+                                    digitalAssetFileIds = currentSelectedStorageFileIds
+                                )
+                                
                                 isSaving = false
                                 if (ok) {
-                                    Toast.makeText(context, "Upload successful", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                                     onBack()
                                 } else {
-                                    Toast.makeText(context, "Upload failed: $msg", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                 }
                             }
                         },
                         enabled = !isSaving
                     ) { Text(if (isSaving) "Uploading..." else "Sync to Cloud") }
 
-                    // 只有在编辑现有事件时才显示删除按钮
+                    // 只有在编辑现有事件时才显示删除按�?
                     if (eventId.isNotBlank() && eventId != "0") {
                         OutlinedButton(
                             onClick = { showDeleteDialog = true },
@@ -971,12 +1192,13 @@ import android.util.Log
                 showRiskDialog = false
                 if (r != null) riskResult = r
             },
-            loader = viewModel.createRiskMatrixLoader(projectName),
+            loader = projectUid?.let { viewModel.createRiskMatrixLoader(it) } 
+                ?: viewModel.createRiskMatrixLoaderByName(projectName),
             initialAnswers = riskResult?.answers
         )
     }
     
-    // 删除确认对话框
+    // 删除确认对话�?
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
@@ -995,9 +1217,9 @@ import android.util.Log
                                     
                                     val result = viewModel.deleteEvent(currentEventId, eventUid)
                                     if (result.isSuccess) {
-                                        isDeleted = true // 标记为已删除，阻止自动保存
+                                        isDeleted = true // 标记为已删除，阻止自动保�?
                                         Toast.makeText(context, "Event deleted successfully", Toast.LENGTH_SHORT).show()
-                                        onBack() // 删除成功后返回上一页
+                                        onBack() // 删除成功后返回上一�?
                                     } else {
                                         Toast.makeText(context, "Failed to delete event: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                                     }
@@ -1021,7 +1243,7 @@ import android.util.Log
         )
     }
     
-    // 关联历史缺陷选择对话框
+    // 关联历史缺陷选择对话�?
     if (showDefectSelectionDialog) {
         DefectSelectionDialog(
             projectName = projectName,
@@ -1047,7 +1269,8 @@ import android.util.Log
                             riskResult = riskResult,
                             photoFiles = photoFiles,
                             audioFiles = audioFiles,
-                            selectedDefects = selectedDefects.toList()
+                            selectedDefects = selectedDefects.toList(),
+                            digitalAssetFileIds = currentSelectedStorageFileIds
                         )
                         
                         result.onSuccess { savedEventId ->
@@ -1075,11 +1298,22 @@ import android.util.Log
             }
         )
     }
+    
+    // 数字资产预览对话框
+    if (showAssetPreview && previewAsset != null) {
+        AssetPreviewDialog(
+            asset = previewAsset!!,
+            onDismiss = {
+                showAssetPreview = false
+                previewAsset = null
+            }
+        )
+    }
 }
 
 /**
  * 离开页面确认弹窗组件
- * 当用户在没有关联defect的情况下尝试离开页面时显示
+ * 当用户在没有关联defect的情况下尝试离开页面时显�?
  * 提供全英文的提示信息
  */
 @Composable
@@ -1161,7 +1395,7 @@ private fun DefectInfoCard(
                 .fillMaxWidth()
                 .clickable { onDefectClick(defect) },
             shape = RoundedCornerShape(10.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)), // 淡灰色背景
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)), // 淡灰色背�?
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
         ) {
             Column(
@@ -1190,7 +1424,7 @@ private fun DefectInfoCard(
                     }
                 }
                 
-                // 图片缩略图展示区域
+                // 图片缩略图展示区�?
                 if (defectImages.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     DefectThumbnailRow(
@@ -1202,7 +1436,7 @@ private fun DefectInfoCard(
         }
     }
     
-    // 全屏图片预览对话框
+    // 全屏图片预览对话�?
     if (largePhotoPath != null) {
         DefectLargePhotoDialog(
             path = largePhotoPath!!,
@@ -1212,7 +1446,7 @@ private fun DefectInfoCard(
 }
 
 /**
- * 缺陷图片缩略图横向列表
+ * 缺陷图片缩略图横向列�?
  * 参照历史缺陷列表的ThumbnailRow实现，支持横向滑动和点击预览
  */
 @Composable
@@ -1230,7 +1464,7 @@ private fun DefectThumbnailRow(images: List<String>, onPhotoClick: (String) -> U
 }
 
 /**
- * 单个缺陷文件缩略图组件
+ * 单个缺陷文件缩略图组�?
  * 参照历史缺陷列表的FileThumbnail实现，异步加载图片并支持点击预览
  */
 @Composable
@@ -1265,7 +1499,7 @@ private fun DefectFileThumbnail(path: String, size: Dp, modifier: Modifier = Mod
 }
 
 /**
- * 缺陷大图预览对话框
+ * 缺陷大图预览对话�?
  * 参照历史缺陷列表的LargePhotoDialogForPath实现，支持双指缩放和拖拽
  */
 @Composable
@@ -1311,13 +1545,13 @@ private fun DefectLargePhotoDialog(path: String, onDismiss: () -> Unit) {
 }
 
 /**
- * 生成安全的文件名，移除特殊字符
+ * 生成安全的文件名，移除特殊字�?
  */
 private fun sanitize(name: String): String = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
 
 /**
- * 缺陷选择项组件
- * 按照历史缺陷列表样式展示，包含编号、风险等级标签和图片缩略图
+ * 缺陷选择项组�?
+ * 按照历史缺陷列表样式展示，包含编号、风险等级标签和图片缩略�?
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -1343,7 +1577,7 @@ private fun DefectSelectionItem(
                 .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 选择框
+            // 选择�?
             Checkbox(
                 checked = isSelected,
                 onCheckedChange = onSelectionChanged,
@@ -1359,7 +1593,7 @@ private fun DefectSelectionItem(
             Column(
                 modifier = Modifier.weight(1f)
             ) {
-                // 标题行：缺陷编号和风险等级标签
+                // 标题行：缺陷编号和风险等级标�?
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -1381,13 +1615,13 @@ private fun DefectSelectionItem(
                 }
                 
                 // 图片缩略图（如果有的话）
-                val images = defect.images // images 已经是 List<String> 类型
+                val images = defect.images // images 已经�?List<String> 类型
                 if (images.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(images.take(3)) { imagePath -> // 最多显示3张图片
+                        items(images.take(3)) { imagePath -> // 最多显�?张图�?
                             DefectThumbnail(
                                 path = imagePath,
                                 size = 48.dp
@@ -1423,11 +1657,11 @@ private fun DefectSelectionItem(
 /**
  * 风险等级标签组件
  * 
- * 统一的风险等级标签UI组件，具有圆角背景、内边距和颜色配置。
- * 用于在各个界面中显示风险等级，保持一致的视觉效果。
+ * 统一的风险等级标签UI组件，具有圆角背景、内边距和颜色配置�?
+ * 用于在各个界面中显示风险等级，保持一致的视觉效果�?
  * 
  * @param riskLevel 风险等级字符串（如P1、P2、P3、P4等）
- * @param modifier 修饰符
+ * @param modifier 修饰�?
  */
 @Composable
 private fun RiskLevelTag(
@@ -1476,8 +1710,8 @@ private fun RiskTag(risk: String) {
 }
 
 /**
- * 缺陷图片缩略图组件
- * 用于在选择对话框中显示缺陷的图片预览
+ * 缺陷图片缩略图组�?
+ * 用于在选择对话框中显示缺陷的图片预�?
  */
 @Composable
 private fun DefectThumbnail(path: String, size: Dp) {
@@ -1513,8 +1747,8 @@ private fun DefectThumbnail(path: String, size: Dp) {
 }
 
 /**
- * 缺陷选择对话框
- * 显示当前项目下的历史缺陷列表，支持多选
+ * 缺陷选择对话�?
+ * 显示当前项目下的历史缺陷列表，支持多�?
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1527,13 +1761,13 @@ private fun DefectSelectionDialog(
     val viewModel: EventFormViewModel = hiltViewModel()
     val scope = rememberCoroutineScope()
     
-    // 获取当前项目的UID（从projectName推导）
+    // 获取当前项目的UID（从projectName推导�?
     var projectUid by remember { mutableStateOf("") }
     var availableDefects by remember { mutableStateOf<List<DefectEntity>>(emptyList()) }
     var tempSelectedDefects by remember { mutableStateOf(selectedDefects.toMutableList()) }
     var isLoading by remember { mutableStateOf(true) }
     
-    // 加载项目UID和缺陷列表
+    // 加载项目UID和缺陷列�?
     LaunchedEffect(projectName) {
         scope.launch {
             try {
@@ -1545,7 +1779,7 @@ private fun DefectSelectionDialog(
                         // 订阅缺陷列表
                         launch {
                             viewModel.getDefectsByProjectUid(projectUid).collect { defects: List<DefectEntity> ->
-                                // 过滤掉duty of care类型的缺陷
+                                // 过滤掉duty of care类型的缺�?
                                 availableDefects = defects.filter { defect ->
                                     val type = defect.type.uppercase()
                                     // 过滤掉包含DUTY和CARE关键词的类型
@@ -1587,118 +1821,127 @@ private fun DefectSelectionDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.85f)
-                    .clickable(enabled = false) { /* 阻止点击穿透 */ },
+                    .clickable(enabled = false) { /* ��ֹ�����͸ */ },
                 shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
-                Column(
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(16.dp)
                 ) {
                     // 标题栏
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Select Associated Defects",
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1565C0)
-                        )
-                        IconButton(onClick = onDismiss) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = Color(0xFF546E7A)
-                            )
-                        }
-                    }
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    HorizontalDivider(color = Color(0xFFE0E0E0))
-                    
-                    // 内容区域
-                    if (isLoading) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(color = Color(0xFF1565C0))
-                        }
-                    } else if (availableDefects.isEmpty()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            contentAlignment = Alignment.Center
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "No historical defect data available",
-                                fontSize = 16.sp,
-                                color = Color(0xFF90A4AE)
+                                text = "Select Associated Defects",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1565C0)
                             )
-                        }
-                    } else {
-                        // 缺陷列表
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .padding(vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(availableDefects) { defect ->
-                                DefectSelectionItem(
-                                    defect = defect,
-                                    isSelected = tempSelectedDefects.any { it.defectId == defect.defectId },
-                                    onSelectionChanged = { isSelected ->
-                                        tempSelectedDefects = if (isSelected) {
-                                            if (!tempSelectedDefects.any { it.defectId == defect.defectId }) {
-                                                (tempSelectedDefects + defect).toMutableList()
-                                            } else {
-                                                tempSelectedDefects
-                                            }
-                                        } else {
-                                            tempSelectedDefects.filter { it.defectId != defect.defectId }.toMutableList()
-                                        }
-                                    }
+                            IconButton(onClick = onDismiss) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = Color(0xFF546E7A)
                                 )
                             }
                         }
                     }
                     
-                    HorizontalDivider(color = Color(0xFFE0E0E0))
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    
+                    item {
+                        HorizontalDivider(color = Color(0xFFE0E0E0))
+                    }
+                    
+                    // 内容区域
+                    if (isLoading) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(400.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = Color(0xFF1565C0))
+                            }
+                        }
+                    } else if (availableDefects.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(400.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "No historical defect data available",
+                                    fontSize = 16.sp,
+                                    color = Color(0xFF90A4AE)
+                                )
+                            }
+                        }
+                    } else {
+                        // 缺陷列表
+                        item {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        items(availableDefects) { defect ->
+                            DefectSelectionItem(
+                                defect = defect,
+                                isSelected = tempSelectedDefects.any { it.defectId == defect.defectId },
+                                onSelectionChanged = { isSelected ->
+                                    tempSelectedDefects = if (isSelected) {
+                                        if (!tempSelectedDefects.any { it.defectId == defect.defectId }) {
+                                            (tempSelectedDefects + defect).toMutableList()
+                                        } else {
+                                            tempSelectedDefects
+                                        }
+                                    } else {
+                                        tempSelectedDefects.filter { it.defectId != defect.defectId }.toMutableList()
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    
+                    item {
+                        HorizontalDivider(color = Color(0xFFE0E0E0))
+                    }
                     
                     // 底部按钮
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color(0xFF546E7A)
-                            )
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text("Cancel")
-                        }
-                        Button(
-                            onClick = { onConfirm(tempSelectedDefects) },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF1565C0)
-                            )
-                        ) {
-                            Text("Confirm (${tempSelectedDefects.size})")
+                            OutlinedButton(
+                                onClick = onDismiss,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFF546E7A)
+                                )
+                            ) {
+                                Text("Cancel")
+                            }
+                            Button(
+                                onClick = { onConfirm(tempSelectedDefects) },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF1565C0)
+                                )
+                            ) {
+                                Text("Confirm (${tempSelectedDefects.size})")
+                            }
                         }
                     }
                 }
@@ -1835,7 +2078,7 @@ private fun AudioPlayerBar(file: File, onDelete: () -> Unit) {
         try {
             if (mediaPlayer == null) {
                 val mp = MediaPlayer()
-                // 优化：为 MediaPlayer 设置 AudioAttributes，改善音频焦点/路由
+                // 优化：为 MediaPlayer 设置 AudioAttributes，改善音频焦�?路由
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
                     mp.setAudioAttributes(
                         android.media.AudioAttributes.Builder()
@@ -1870,7 +2113,7 @@ private fun AudioPlayerBar(file: File, onDelete: () -> Unit) {
         position = targetMs.coerceIn(0, duration)
     }
 
-    // 时间格式化 mm:ss
+    // 时间格式�?mm:ss
     fun fmt(ms: Int): String {
         val totalSec = (ms / 1000).coerceAtLeast(0)
         val m = totalSec / 60
@@ -1936,7 +2179,7 @@ private fun VoiceRecordingOverlay(level: Float, modifier: Modifier = Modifier) {
     /**
      * 文件级注释：录音波形覆盖层
      * 职责：在页面底部显示类似微信语音的动态波浪效果；根据录音实时音量 level(0..1) 调整波形振幅。
-     * 设计：使用 rememberInfiniteTransition 驱动相位滚动，以 Canvas 绘制多段柱状波形；采用 DP 插值与浅色渐变。
+     * 设计：使用 rememberInfiniteTransition 驱动相位滚动，以 Canvas 绘制多条柱状波形；采用 DP 插值与浅色渐变。
      * 参数：
      * - level: 当前归一化音量（0f..1f），由 MediaRecorder.getMaxAmplitude() 平滑得到
      * - modifier: 容器修饰符，用于定位到底部居中等
@@ -2002,19 +2245,3 @@ private fun VoiceRecordingOverlay(level: Float, modifier: Modifier = Modifier) {
         }
     }
 }
-
-
-// 删除重复的底部上传按钮占位片段，已将主按钮改为“同步到云”并调用 viewModel.uploadEvent。
-// 此处保留空白以维持文件结构与函数闭合。
-// Button(
-//     onClick = {
-//         if (isSaving) return@Button
-//         isSaving = true
-//         scope.launch {
-//             // TODO: 旧占位上传入口已移除
-//             isSaving = false
-//             Toast.makeText(context, "TODO removed", Toast.LENGTH_SHORT).show()
-//         }
-//     },
-//     enabled = !isSaving
-// ) { Text(if (isSaving) "Uploading..." else "同步到云") }

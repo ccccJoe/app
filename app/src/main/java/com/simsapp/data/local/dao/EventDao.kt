@@ -59,4 +59,8 @@ interface EventDao {
     /** Get event by id. */
     @Query("SELECT * FROM event WHERE event_id = :id LIMIT 1")
     suspend fun getById(id: Long): EventEntity?
+
+    /** Get event by UID (using event_id as string). */
+    @Query("SELECT * FROM event WHERE event_id = :uid LIMIT 1")
+    suspend fun getByUid(uid: String): EventEntity?
 }

@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 8,
-    "identityHash": "0e2d015c124b327b22d0db55c63bb013",
+    "version": 13,
+    "identityHash": "989840a67983d705e40a365f35b8f072",
     "entities": [
       {
         "tableName": "project",
@@ -525,7 +525,7 @@
       },
       {
         "tableName": "project_digital_asset",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `project_uid` TEXT NOT NULL, `node_id` TEXT NOT NULL, `parent_id` TEXT, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `file_id` TEXT, `local_path` TEXT, `download_status` TEXT NOT NULL, `download_url` TEXT, `file_size` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `project_uids` TEXT NOT NULL, `node_id` TEXT NOT NULL, `parent_id` TEXT, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `file_id` TEXT, `local_path` TEXT, `download_status` TEXT NOT NULL, `download_url` TEXT, `file_size` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `content` TEXT)",
         "fields": [
           {
             "fieldPath": "id",
@@ -534,8 +534,8 @@
             "notNull": true
           },
           {
-            "fieldPath": "projectUid",
-            "columnName": "project_uid",
+            "fieldPath": "projectUids",
+            "columnName": "project_uids",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -604,6 +604,12 @@
             "columnName": "updated_at",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "content",
+            "columnName": "content",
+            "affinity": "TEXT",
+            "notNull": false
           }
         ],
         "primaryKey": {
@@ -614,13 +620,13 @@
         },
         "indices": [
           {
-            "name": "index_project_digital_asset_project_uid",
+            "name": "index_project_digital_asset_project_uids",
             "unique": false,
             "columnNames": [
-              "project_uid"
+              "project_uids"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_project_digital_asset_project_uid` ON `${TABLE_NAME}` (`project_uid`)"
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_project_digital_asset_project_uids` ON `${TABLE_NAME}` (`project_uids`)"
           },
           {
             "name": "index_project_digital_asset_node_id",
@@ -642,12 +648,12 @@
           },
           {
             "name": "index_project_digital_asset_file_id",
-            "unique": false,
+            "unique": true,
             "columnNames": [
               "file_id"
             ],
             "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_project_digital_asset_file_id` ON `${TABLE_NAME}` (`file_id`)"
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_project_digital_asset_file_id` ON `${TABLE_NAME}` (`file_id`)"
           }
         ],
         "foreignKeys": []
@@ -656,7 +662,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '0e2d015c124b327b22d0db55c63bb013')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '989840a67983d705e40a365f35b8f072')"
     ]
   }
 }

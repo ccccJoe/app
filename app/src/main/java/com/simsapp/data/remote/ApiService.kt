@@ -131,5 +131,32 @@ interface ApiService {
     @GET
     suspend fun downloadRiskMatrixByUrl(@Url fileUrl: String): Response<ResponseBody>
 
+    // -------------------- Event Sync Endpoints --------------------
+    /**
+     * 创建事件上传任务，支持多个事件同步
+     * POST https://sims.ink-stone.win/zuul/sims-ym/app/event/create_event_upload
+     * 
+     * @param endpoint 完整的接口地址
+     * @param requestBody 请求体，包含 task_uid, target_project_uid, upload_list 等字段
+     */
+    @POST
+    suspend fun createEventUpload(
+        @Url endpoint: String,
+        @Body requestBody: RequestBody
+    ): Response<ResponseBody>
+
+    /**
+     * 轮询查询事件上传成功状态
+     * GET https://sims.ink-stone.win/zuul/sims-ym/app/event/notice_event_upload_success
+     * 
+     * @param endpoint 完整的接口地址
+     * @param taskUid 任务UID，用于查询对应任务的状态
+     */
+    @GET
+    suspend fun noticeEventUploadSuccess(
+        @Url endpoint: String,
+        @Query("task_uid") taskUid: String
+    ): Response<ResponseBody>
+
 
 }

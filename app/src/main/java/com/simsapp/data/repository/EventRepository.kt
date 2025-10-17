@@ -25,6 +25,7 @@ import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import org.json.JSONObject
+import com.google.gson.annotations.SerializedName
 
 /**
  * EventRepository
@@ -58,6 +59,9 @@ class EventRepository @Inject constructor(
     /** Get event by id. */
     suspend fun getEventById(eventId: Long): EventEntity? = dao.getById(eventId)
 
+    /** Get event by UID. */
+    suspend fun getEventByUid(uid: String): EventEntity? = dao.getByUid(uid)
+
     /** Delete event by id. */
     suspend fun delete(id: Long) = dao.deleteById(id)
 
@@ -73,20 +77,81 @@ class EventRepository @Inject constructor(
         false
     }
 
-    // ==================== New: Event Zip Sync ====================
     /**
-     * 将指定事件目录压缩为zip并上传到OSS。
+     * 创建事件上传任务
+     * @param taskUid 任务唯一标识
+     * @param targetProjectUid 目标项目UID
+     * @param uploadList 上传列表，包含事件UID、包哈希值、包名称
+     * @return Pair(success, EventUploadResponse?) 成功标志和响应数据
+     */
+    suspend fun createEventUpload(
+        taskUid: String,
+        targetProjectUid: String,
+        uploadList: List<EventUploadItem>
+    ): Pair<Boolean, EventUploadResponse?> {
+        return try {
+            val requestData = EventUploadRequest(
+                taskUid = taskUid,
+                targetProjectUid = targetProjectUid,
+                uploadList = uploadList
+            )
+            val gson = com.google.gson.Gson()
+            val jsonString = gson.toJson(requestData)
+            val requestBody = jsonString.toRequestBody("application/json".toMediaTypeOrNull())
+            
+            val response = api.createEventUpload(
+                endpoint = "https://sims.ink-stone.win/zuul/sims-ym/app/event/create_event_upload",
+                requestBody = requestBody
+            )
+            
+            if (response.isSuccessful) {
+                val responseText = response.body()?.string() ?: ""
+                val uploadResponse = gson.fromJson(responseText, EventUploadResponse::class.java)
+                true to uploadResponse
+            } else {
+                false to null
+            }
+        } catch (e: Exception) {
+            false to null
+        }
+    }
+
+    /**
+     * 轮询查询事件上传成功状态
+     * @param taskUid 任务UID
+     * @return Pair(success, isCompleted) success表示请求是否成功，isCompleted表示任务是否完成
+     */
+    suspend fun noticeEventUploadSuccess(taskUid: String): Pair<Boolean, Boolean> {
+        return try {
+            val response = api.noticeEventUploadSuccess(
+                endpoint = "https://sims.ink-stone.win/zuul/sims-ym/app/event/notice_event_upload_success",
+                taskUid = taskUid
+            )
+            
+            if (response.isSuccessful) {
+                val responseText = response.body()?.string() ?: ""
+                // 假设返回的是 JSON 格式，包含 success 字段表示是否完成
+                val gson = com.google.gson.Gson()
+                val result = gson.fromJson(responseText, EventUploadStatusResponse::class.java)
+                true to (result?.success == true)
+            } else {
+                false to false
+            }
+        } catch (e: Exception) {
+            false to false
+        }
+    }
+
+    // ==================== New: Event Zip Creation ====================
+    /**
+     * 将指定事件目录压缩为zip文件并计算哈希值。
      * @param context Android 上下文，用于定位内部存储目录
      * @param eventUid 事件UID（目录名）
-     * @param username X-USERNAME 请求头（默认 test）。说明：默认由拦截器注入，此参数仅用于覆盖默认值。
-     * @param authorization Authorization（如："Bearer abc"）。说明：默认由拦截器注入，此参数仅用于覆盖默认值。
-     * @return Pair(success, responseText)
+     * @return Pair(success, sha256Hash) 成功标志和SHA-256哈希值
      */
-    suspend fun uploadEventZip(
+    suspend fun createEventZip(
         context: Context,
-        eventUid: String,
-        username: String = "test",
-        authorization: String ?= null
+        eventUid: String
     ): Pair<Boolean, String> {
         val eventDir = File(File(context.filesDir, "events"), eventUid)
         if (!eventDir.exists()) return false to "event directory not found: ${eventDir.absolutePath}"
@@ -103,39 +168,59 @@ class EventRepository @Inject constructor(
             return false to "zip error: ${e.message}"
         }
 
-        // 2) 计算SHA-256，作为remark
+        // 2) 计算SHA-256哈希值
         val sha256 = sha256Of(zipFile)
+        
+        // 3) 将压缩包保存到指定位置，以便后续上传使用
+        val finalZipFile = File(cacheDir, "${eventUid}.zip")
+        if (finalZipFile.exists()) {
+            finalZipFile.delete()
+        }
+        zipFile.renameTo(finalZipFile)
+        
+        return true to sha256
+    }
 
-        // 3) 获取上传票据（Header由拦截器统一注入，除非显式覆写参数）
-        val ticketUrl = "https://sims.ink-stone.win/zuul/sims-ym/storage/upload/ticket"
-        val ticketResp = try {
-            api.getUploadTicket(
-                endpoint = ticketUrl,
-                fileName = zipFile.name,
-                type = "ZIP",
-                remark = sha256,
-                username = null,
-                authorization = null
-            )
-        } catch (e: Exception) {
-            return false to "ticket request failed: ${e.message}"
+    /**
+     * 根据事件包哈希值和票据信息上传压缩包到OSS
+     * @param context Android 上下文
+     * @param eventUid 事件UID
+     * @param eventPackageHash 事件包哈希值
+     * @param ticketData 票据数据（包含host, dir, file_id, policy, signature, accessid等）
+     * @return Pair(success, message) 上传结果
+     */
+    suspend fun uploadEventZipWithTicket(
+        context: Context,
+        eventUid: String,
+        eventPackageHash: String,
+        ticketData: Map<String, Any>
+    ): Pair<Boolean, String> {
+        // 1) 查找对应的压缩包文件
+        val cacheDir = File(context.cacheDir, "sync_zip")
+        val zipFile = File(cacheDir, "${eventUid}.zip")
+        
+        if (!zipFile.exists()) {
+            return false to "zip file not found: ${zipFile.absolutePath}"
         }
-        if (!ticketResp.isSuccessful) {
-            return false to "ticket http ${ticketResp.code()}"
+        
+        // 2) 验证哈希值是否匹配
+        val actualHash = sha256Of(zipFile)
+        if (actualHash != eventPackageHash) {
+            return false to "hash mismatch: expected $eventPackageHash, actual $actualHash"
         }
-        val ticketText = ticketResp.body()?.string() ?: return false to "empty ticket body"
-        val parsed = runCatching { JSONObject(ticketText) }.getOrElse { return false to "invalid ticket json" }
-        val data = parsed.optJSONObject("data") ?: return false to "ticket missing data"
-        val host = data.optString("host")
-        val dir = data.optString("dir")
-        val fileId = data.optString("file_id")
-        val policy = data.optString("policy")
-        val signature = data.optString("signature")
-        val accessId = data.optString("accessid")
+        
+        // 3) 解析票据信息
+        val host = ticketData["host"] as? String ?: return false to "missing host in ticket"
+        val dir = ticketData["dir"] as? String ?: ""
+        val fileId = ticketData["file_id"] as? String ?: return false to "missing file_id in ticket"
+        val policy = ticketData["policy"] as? String ?: return false to "missing policy in ticket"
+        val signature = ticketData["signature"] as? String ?: return false to "missing signature in ticket"
+        val accessId = ticketData["accessid"] as? String ?: return false to "missing accessid in ticket"
+        
         val keyStr = (if (dir.isNotBlank()) dir else "") + fileId
         val uploadUrl = if (host.startsWith("http")) host else "https://$host"
-
-        // 4) 表单直传
+        
+        // 4) 表单直传到OSS
         val plain = "text/plain".toMediaType()
         val key: RequestBody = keyStr.toRequestBody(plain)
         val policyRB: RequestBody = policy.toRequestBody(plain)
@@ -147,16 +232,23 @@ class EventRepository @Inject constructor(
             filename = zipFile.name,
             body = zipFile.asRequestBody("application/zip".toMediaType())
         )
+        
         val uploadResp = try {
             api.ossFormUpload(uploadUrl, key, policyRB, accRB, sigRB, statusRB, part)
         } catch (e: Exception) {
-            zipFile.delete()
             return false to "upload error: ${e.message}"
         }
+        
         val bodyText = uploadResp.body()?.string() ?: ""
-        // 清理临时zip
+        
+        // 5) 上传完成后清理临时文件
         zipFile.delete()
-        return uploadResp.isSuccessful to (if (bodyText.isNotBlank()) bodyText else "http ${uploadResp.code()}")
+        
+        return if (uploadResp.isSuccessful) {
+            true to "upload successful"
+        } else {
+            false to (if (bodyText.isNotBlank()) bodyText else "http ${uploadResp.code()}")
+        }
     }
 
     /** 递归压缩目录 */
@@ -251,3 +343,90 @@ class EventRepository @Inject constructor(
         }
     }
 }
+
+/**
+ * 事件上传状态响应数据模型
+ * 用于解析 notice_event_upload_success 接口返回的数据
+ */
+data class EventUploadStatusResponse(
+    @SerializedName("success")
+    val success: Boolean,
+    @SerializedName("code")
+    val code: Int,
+    @SerializedName("message")
+    val message: String?
+)
+
+/**
+ * 事件上传请求数据类
+ */
+data class EventUploadRequest(
+    @SerializedName("task_uid")
+    val taskUid: String,
+    @SerializedName("target_project_uid")
+    val targetProjectUid: String,
+    @SerializedName("upload_list")
+    val uploadList: List<EventUploadItem>
+)
+
+/**
+ * 事件上传项数据类
+ */
+data class EventUploadItem(
+    @SerializedName("event_uid")
+    val eventUid: String,
+    @SerializedName("event_package_hash")
+    val eventPackageHash: String,
+    @SerializedName("event_package_name")
+    val eventPackageName: String
+)
+
+/**
+ * 事件上传响应数据类
+ */
+data class EventUploadResponse(
+    @SerializedName("data")
+    val data: List<EventUploadResponseItem>?,
+    @SerializedName("code")
+    val code: Int,
+    @SerializedName("message")
+    val message: String?,
+    @SerializedName("success")
+    val success: Boolean
+)
+
+/**
+ * 事件上传响应项数据类
+ */
+data class EventUploadResponseItem(
+    @SerializedName("task_uid")
+    val taskUid: String,
+    @SerializedName("event_uid")
+    val eventUid: String,
+    @SerializedName("event_package_hash")
+    val eventPackageHash: String,
+    @SerializedName("event_package_name")
+    val eventPackageName: String,
+    @SerializedName("ticket")
+    val ticket: TicketData
+)
+
+/**
+ * 票据数据类
+ */
+data class TicketData(
+    @SerializedName("file_id")
+    val fileId: String,
+    @SerializedName("accessid")
+    val accessId: String,
+    @SerializedName("policy")
+    val policy: String,
+    @SerializedName("signature")
+    val signature: String,
+    @SerializedName("dir")
+    val dir: String,
+    @SerializedName("host")
+    val host: String,
+    @SerializedName("expire")
+    val expire: String
+)

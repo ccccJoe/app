@@ -95,11 +95,17 @@ class MainActivity : ComponentActivity() {
             }
         }
         /** StoragePicker page: show storage browser for selecting files in a project scope */
-        data object StoragePicker : AppDestination("storagePicker?projectName={projectName}") {
+        data object StoragePicker : AppDestination("storagePicker?projectName={projectName}&projectUid={projectUid}") {
             const val ARG_PROJECT_NAME = "projectName"
-            fun route(projectName: String? = null): String {
-                val qs = if (projectName.isNullOrBlank()) "" else "?projectName=${Uri.encode(projectName)}"
-                return "storagePicker$qs"
+            const val ARG_PROJECT_UID = "projectUid"
+            fun route(projectName: String? = null, projectUid: String? = null): String {
+                val name = Uri.encode(projectName ?: "")
+                val uid = Uri.encode(projectUid ?: "")
+                val qs = buildList {
+                    if (projectName != null) add("projectName=$name")
+                    if (projectUid != null) add("projectUid=$uid")
+                }.joinToString("&")
+                return if (qs.isBlank()) "storagePicker" else "storagePicker?$qs"
             }
         }
         /** ProjectInfo page: show grouped key-value project details */
@@ -297,29 +303,46 @@ class MainActivity : ComponentActivity() {
                         val defectId = if (defectIdEncoded.isBlank()) "" else Uri.decode(defectIdEncoded)
                         // 缓存从文件选择器返回的选项
                         var selectedStorage by remember { mutableStateOf(listOf<String>()) }
+                        var selectedStorageFileIds by remember { mutableStateOf(listOf<String>()) }
                         // 观察从 StoragePicker 返回的结果
                         val currentBackStackEntry = navController.currentBackStackEntry
                         DisposableEffect(currentBackStackEntry) {
                             val handle = currentBackStackEntry?.savedStateHandle
                             val liveData = handle?.getLiveData<List<String>>("selectedStorage")
+                            val fileIdsLiveData = handle?.getLiveData<List<String>>("selectedStorageFileIds")
                             val observer = Observer<List<String>> { names ->
                                 if (names != null) {
                                     selectedStorage = names
                                     handle?.remove<List<String>>("selectedStorage")
                                 }
                             }
+                            val fileIdsObserver = Observer<List<String>> { fileIds ->
+                                if (fileIds != null) {
+                                    selectedStorageFileIds = fileIds
+                                    handle?.remove<List<String>>("selectedStorageFileIds")
+                                }
+                            }
                             liveData?.observeForever(observer)
-                            onDispose { liveData?.removeObserver(observer) }
+                            fileIdsLiveData?.observeForever(fileIdsObserver)
+                            onDispose { 
+                                liveData?.removeObserver(observer)
+                                fileIdsLiveData?.removeObserver(fileIdsObserver)
+                            }
                         }
                         EventFormScreen(
                             projectName = projectName,
                             eventId = eventId,
                             defectId = defectId,
                             onBack = { navController.popBackStack() },
-                            onOpenStorage = {
-                                navController.navigate(AppDestination.StoragePicker.route(projectName))
+                            onOpenStorage = { projectUid, selectedAssetFileIds ->
+                                android.util.Log.d("MainActivity", "接收到数字资产选择请求，projectUid: $projectUid, fileIds: ${selectedAssetFileIds.joinToString()}")
+                                // 保存当前选中的资产fileId到savedStateHandle，用于回显
+                                navController.currentBackStackEntry?.savedStateHandle?.set("selectedStorageFileIds", selectedAssetFileIds)
+                                // 直接使用传递的projectUid导航到StoragePicker
+                                navController.navigate(AppDestination.StoragePicker.route(null, projectUid))
                             },
                             selectedStorage = selectedStorage,
+                            selectedStorageFileIds = selectedStorageFileIds, // 新增：传递数字资产file_id列表
                             onOpenDefect = { defect ->
                                 // 从defect对象中获取projectUid和defectNo来导航到详情页面
                                 val projectUid = defect.projectUid
@@ -336,19 +359,40 @@ class MainActivity : ComponentActivity() {
                             navArgument(AppDestination.StoragePicker.ARG_PROJECT_NAME) {
                                 type = NavType.StringType
                                 defaultValue = ""
+                            },
+                            navArgument(AppDestination.StoragePicker.ARG_PROJECT_UID) {
+                                type = NavType.StringType
+                                defaultValue = ""
                             }
                         )
                     ) { backStackEntry ->
                         val encodedProject = backStackEntry.arguments?.getString(AppDestination.StoragePicker.ARG_PROJECT_NAME).orEmpty()
                         val projectName = if (encodedProject.isNullOrBlank()) "" else Uri.decode(encodedProject)
-                        // 模拟一个简单的文件选择器 UI，占位实现
+                        val encodedProjectUid = backStackEntry.arguments?.getString(AppDestination.StoragePicker.ARG_PROJECT_UID).orEmpty()
+                        val projectUid = if (encodedProjectUid.isNullOrBlank()) "" else Uri.decode(encodedProjectUid)
+                        
+                        // 获取之前选中的资产名称列表（用于回显）
+                        val previousSelectedStorage = navController.previousBackStackEntry?.savedStateHandle?.get<List<String>>("selectedStorage") ?: emptyList()
+                        val previousSelectedStorageFileIds = navController.previousBackStackEntry?.savedStateHandle?.get<List<String>>("selectedStorageFileIds") ?: emptyList()
+                        
+                        android.util.Log.d("MainActivity", "StoragePicker - 获取到的回显数据: fileIds=${previousSelectedStorageFileIds.joinToString()}")
+                        android.util.Log.d("MainActivity", "StoragePicker - 获取到的回显数据: names=${previousSelectedStorage.joinToString()}")
+                        
                         StoragePickerScreen(
-                            projectName = projectName,
-                            onBack = { navController.popBackStack() },
-                            onConfirm = { names ->
-                                // 将选择结果设置到前一个页面的状态（通过 SavedStateHandle 或直接返回）
-                                // 这里简化为：返回时通过 navController.currentBackStackEntry?.savedStateHandle 传递
-                                navController.previousBackStackEntry?.savedStateHandle?.set("selectedStorage", names)
+                            projectUid = projectUid,
+                            selectedAssetFileIds = previousSelectedStorageFileIds, // 传递当前选中的资产fileId列表用于回显
+                            onBackClick = { navController.popBackStack() },
+                            onItemSelected = { node ->
+                                // 处理单选的数字资产项目（保持向后兼容）
+                                navController.previousBackStackEntry?.savedStateHandle?.set("selectedAsset", node.name)
+                                navController.popBackStack()
+                            },
+                            onMultipleItemsSelected = { selectedItems ->
+                                // 处理多选的数字资产项目列表
+                                val selectedNames = selectedItems.map { it.name }
+                                val selectedFileIds = selectedItems.mapNotNull { it.fileId } // 提取fileId列表
+                                navController.previousBackStackEntry?.savedStateHandle?.set("selectedStorage", selectedNames)
+                                navController.previousBackStackEntry?.savedStateHandle?.set("selectedStorageFileIds", selectedFileIds) // 新增：保存fileId列表
                                 navController.popBackStack()
                             }
                         )

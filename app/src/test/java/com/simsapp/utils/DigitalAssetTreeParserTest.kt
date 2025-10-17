@@ -321,23 +321,23 @@ class DigitalAssetTreeParserTest {
         val riskMatrixNode = result.find { it.fileId == "risk_matrix_001" }
         assertNotNull("Risk matrix node should exist", riskMatrixNode)
         assertEquals("Risk Matrix Config", riskMatrixNode!!.nodeName)
-        assertTrue("Risk matrix node should be marked as risk matrix", riskMatrixNode.isRiskMatrix)
+        assertEquals("json", riskMatrixNode.fileType)
 
-        // Check other document nodes exist and are not marked as risk matrix
+        // Check other document nodes exist
         val docNode1 = result.find { it.fileId == "doc_001" }
         assertNotNull("Document 1 should exist", docNode1)
         assertEquals("Document 1", docNode1!!.nodeName)
-        assertFalse("Document 1 should not be marked as risk matrix", docNode1.isRiskMatrix)
+        assertEquals("pdf", docNode1.fileType)
 
         val docNode2 = result.find { it.fileId == "doc_002" }
         assertNotNull("Document 2 should exist", docNode2)
         assertEquals("Document 2", docNode2!!.nodeName)
-        assertFalse("Document 2 should not be marked as risk matrix", docNode2.isRiskMatrix)
+        assertEquals("pdf", docNode2.fileType)
 
         val imgNode = result.find { it.fileId == "img_001" }
         assertNotNull("Image node should exist", imgNode)
         assertEquals("Image 1", imgNode!!.nodeName)
-        assertFalse("Image node should not be marked as risk matrix", imgNode.isRiskMatrix)
+        assertEquals("jpg", imgNode.fileType)
 
         // Should not contain folder or null file_id nodes
         assertFalse("Should not contain Documents folder", result.any { it.nodeName == "Documents" })

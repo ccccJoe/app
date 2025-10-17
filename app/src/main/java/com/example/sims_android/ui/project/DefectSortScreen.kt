@@ -110,83 +110,81 @@ fun DefectSortScreen(
             )
         }
     ) { paddingValues ->
-        Column(
+        // Use LazyColumn as the main container
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .background(MaterialTheme.colorScheme.background)
+                .background(MaterialTheme.colorScheme.background),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // 说明文字
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            ) {
-                Text(
-                    text = "Long press the drag handle (⋮⋮) on the left to reorder defects. The new order will be saved when you confirm.",
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
-            
-            // 可拖拽的缺陷列表 - 移除所有滑动限制
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                itemsIndexed(
-                     items = sortableDefects,
-                     key = { _, item -> item.no }
-                 ) { index, item ->
-                    DraggableDefectItem(
-                        item = item,
-                        index = index,
-                        isDragging = draggedIndex == index,
-                        onDragStart = { startIndex ->
-                            draggedIndex = startIndex
-                            isDragging = true
-                            Log.d("DefectSort", "开始拖拽: index=$startIndex")
-                        },
-                        onDragEnd = { 
-                            draggedIndex = -1
-                            isDragging = false
-                            Log.d("DefectSort", "结束拖拽")
-                            
-                            // 保存排序后的顺序到 ViewModel
-                            viewModel.updateDefectOrder(sortableDefects.toList())
-                        },
-                        onMove = { fromIndex, toIndex ->
-                            // 改进的实时位置交换逻辑
-                            if (fromIndex != toIndex && 
-                                fromIndex in sortableDefects.indices && 
-                                toIndex in 0 until sortableDefects.size) {
-                                
-                                Log.d("DefectSort", "位置交换: $fromIndex -> $toIndex")
-                                
-                                // 创建新列表并交换位置
-                                val newList = sortableDefects.toMutableList()
-                                
-                                // 安全的位置交换
-                                val clampedToIndex = toIndex.coerceIn(0, newList.size - 1)
-                                if (fromIndex < newList.size && clampedToIndex < newList.size) {
-                                    val item = newList.removeAt(fromIndex)
-                                    newList.add(clampedToIndex, item)
-                                    
-                                    // 立即更新状态，触发重组
-                                    sortableDefects = newList
-                                    draggedIndex = clampedToIndex // 更新拖拽索引
-                                    
-                                    println("交换完成，新列表大小: ${sortableDefects.size}")
-                                }
-                            }
-                        }
+            // 标题项
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Text(
+                        text = "Drag items to reorder defects",
+                        modifier = Modifier.padding(16.dp),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
+            }
+            
+            // 可拖拽的缺陷列表
+            itemsIndexed(
+                 items = sortableDefects,
+                 key = { _, item -> item.no }
+             ) { index, item ->
+                DraggableDefectItem(
+                    item = item,
+                    index = index,
+                    isDragging = draggedIndex == index,
+                    onDragStart = { startIndex ->
+                        draggedIndex = startIndex
+                        isDragging = true
+                        Log.d("DefectSort", "开始拖拽: index=$startIndex")
+                    },
+                    onDragEnd = { 
+                        draggedIndex = -1
+                        isDragging = false
+                        Log.d("DefectSort", "结束拖拽")
+                        
+                        // 保存排序后的顺序到 ViewModel
+                        viewModel.updateDefectOrder(sortableDefects.toList())
+                    },
+                    onMove = { fromIndex, toIndex ->
+                        // 改进的实时位置交换逻辑
+                        if (fromIndex != toIndex && 
+                            fromIndex in sortableDefects.indices && 
+                            toIndex in 0 until sortableDefects.size) {
+                            
+                            Log.d("DefectSort", "位置交换: $fromIndex -> $toIndex")
+                            
+                            // 创建新列表并交换位置
+                            val newList = sortableDefects.toMutableList()
+                            
+                            // 安全的位置交换
+                            val clampedToIndex = toIndex.coerceIn(0, newList.size - 1)
+                            if (fromIndex < newList.size && clampedToIndex < newList.size) {
+                                val item = newList.removeAt(fromIndex)
+                                newList.add(clampedToIndex, item)
+                                
+                                // 立即更新状态，触发重组
+                                sortableDefects = newList
+                                draggedIndex = clampedToIndex // 更新拖拽索引
+                                
+                                println("交换完成，新列表大小: ${sortableDefects.size}")
+                            }
+                        }
+                    }
+                )
             }
         }
     }
@@ -215,7 +213,7 @@ private fun DraggableDefectItem(
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var isLongPressing by remember { mutableStateOf(false) }
     
-    // 拖拽时的视觉效果
+    // 动画效果
     val elevation by animateDpAsState(
         targetValue = if (isDragging) 8.dp else 2.dp,
         animationSpec = tween(200),
@@ -233,7 +231,7 @@ private fun DraggableDefectItem(
         animationSpec = tween(200),
         label = "scale"
     )
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -257,7 +255,7 @@ private fun DraggableDefectItem(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 拖拽手柄 - 使用简化的长按拖拽逻辑
+            // 拖拽手柄
             Box(
                 modifier = Modifier
                     .size(32.dp)
@@ -274,7 +272,7 @@ private fun DraggableDefectItem(
                     }
                     .pointerInput(isLongPressing) {
                         if (isLongPressing) {
-                            // 拖拽手势
+                            // 拖拽手势检测
                             detectDragGestures(
                                 onDragEnd = { 
                                     dragOffset = Offset.Zero
@@ -283,13 +281,13 @@ private fun DraggableDefectItem(
                                     Log.d("DefectSort", "拖拽结束: index=$index")
                                 },
                                 onDrag = { change, dragAmount ->
-                                    // 累积拖拽偏移
+                                    // 更新拖拽偏移
                                     dragOffset += dragAmount
                                     
-                                    // 改进的位置计算 - 更精确的移动检测
+                                    // 计算是否需要交换位置
                                     val itemHeight = 88.dp.toPx() // 项目高度 + 间距
                                     val threshold = itemHeight * 0.5f // 移动阈值设为项目高度的一半
-                                    
+
                                     if (kotlin.math.abs(dragOffset.y) > threshold) {
                                         val direction = if (dragOffset.y > 0) 1 else -1
                                         val newIndex = (index + direction).coerceIn(0, Int.MAX_VALUE)
@@ -297,7 +295,7 @@ private fun DraggableDefectItem(
                                         if (newIndex != index) {
                                             Log.d("DefectSort", "拖拽移动: 从 $index 到 $newIndex, offset=${dragOffset.y}")
                                             onMove(index, newIndex)
-                                            // 重置偏移，避免累积误差
+                                            // 重置偏移，避免连续触发
                                             dragOffset = Offset.Zero
                                         }
                                     }
@@ -327,7 +325,7 @@ private fun DraggableDefectItem(
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
+                     Text(
                          text = item.no,
                          fontWeight = FontWeight.Bold,
                          fontSize = 16.sp,
@@ -350,7 +348,7 @@ private fun DraggableDefectItem(
                  )
             }
             
-            // 排序序号 - 显示实时位置
+            // 序号显示
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = if (isDragging) 
@@ -385,19 +383,20 @@ private fun RiskLevelTag(
     modifier: Modifier = Modifier
 ) {
     val colorPair = RiskTagColors.getColorPair(riskLevel)
-     
-     Surface(
-         modifier = modifier,
-         shape = RoundedCornerShape(4.dp),
-         color = colorPair.backgroundColor,
-         border = BorderStroke(1.dp, colorPair.backgroundColor)
-     ) {
-         Text(
-             text = riskLevel,
-             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-             fontSize = 10.sp,
-             fontWeight = FontWeight.Medium,
-             color = colorPair.textColor
-         )
-     }
+    
+    Box(
+        modifier = modifier
+            .background(
+                color = colorPair.backgroundColor,
+                shape = RoundedCornerShape(4.dp)
+            )
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = riskLevel.trim().uppercase(),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = colorPair.textColor
+        )
+    }
 }

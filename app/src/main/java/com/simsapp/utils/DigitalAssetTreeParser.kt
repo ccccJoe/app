@@ -12,18 +12,17 @@ import org.json.JSONObject
  * DigitalAssetTreeParser
  *
  * Provides utilities to recursively traverse project_digital_asset_tree and extract file_id nodes.
- * According to the business rule: children[0].children[0] is always the risk matrix node.
+ * Uses file_type from response to determine asset type.
  */
 object DigitalAssetTreeParser {
 
     /**
-     * Enum to track position in the tree structure for risk matrix identification.
+     * Enum to track position in tree structure.
      */
     private enum class TreePosition {
-        ROOT,                    // Root node
-        FIRST_LEVEL_CHILD,      // children[0] - first child of root
-        RISK_MATRIX_LEVEL,      // children[0].children[0] - risk matrix position
-        OTHER                   // All other positions
+        ROOT,   // Root level of the tree
+        CHILD,  // Child nodes
+        OTHER   // Other positions
     }
 
     /**
@@ -36,14 +35,13 @@ object DigitalAssetTreeParser {
         val fileType: String?,
         val fileSize: Long?,
         val rawNodeJson: String,
-        val isRiskMatrix: Boolean = false, // 标识是否为风险矩阵数据
         val nodeId: String?, // 节点的id字段
         val parentId: String? // 节点的p_id字段
     )
 
     /**
      * Parse project_digital_asset_tree from project detail JSON and extract all nodes with file_id.
-     * The first child of the first child node (children[0].children[0]) is treated as risk matrix data.
+     * Uses file_type from response to determine asset type (PDF/PIC/REC/MP3).
      *
      * @param projectDetailJson The raw JSON string of project detail
      * @return List of DigitalAssetNode containing file_id and metadata
@@ -95,7 +93,6 @@ object DigitalAssetTreeParser {
     /**
      * Recursively traverse a tree node and collect nodes with file_id.
      * Skips nodes with tree_node_type="Folder" and nodes with null/empty file_id.
-     * Identifies risk matrix based on position: children[0].children[0] is always risk matrix.
      *
      * @param node Current JSON node (JSONObject or JSONArray)
      * @param currentPath Current path in the tree structure
@@ -122,12 +119,14 @@ object DigitalAssetTreeParser {
                 // Check if this node has file_id and it's not null/empty
                 val fileId = node.optString("file_id")
                 if (fileId.isNotEmpty() && fileId != "null") {
-                    val isRiskMatrix = (position == TreePosition.RISK_MATRIX_LEVEL)
-                    android.util.Log.d("DigitalAssetParser", "Found file_id: $fileId at path: $currentPath, position: $position, isRiskMatrix: $isRiskMatrix")
+                    android.util.Log.d("DigitalAssetParser", "Found file_id: $fileId at path: $currentPath")
                     
                     // Extract node id and parent id from JSON
                     val nodeId = node.optString("id").takeIf { it.isNotEmpty() && it != "null" }
                     val parentId = node.optString("p_id").takeIf { it.isNotEmpty() && it != "null" }
+                    
+                    val fileType = extractFileType(node)
+                    android.util.Log.d("DigitalAssetParser", "Node file_type: $fileType")
                     
                     val assetNode = DigitalAssetNode(
                         fileId = fileId,
@@ -135,11 +134,10 @@ object DigitalAssetTreeParser {
                             ?: node.optString("name").takeIf { it.isNotEmpty() }
                             ?: node.optString("title").takeIf { it.isNotEmpty() },
                         nodePath = currentPath,
-                        fileType = extractFileType(node),
+                        fileType = fileType,
                         fileSize = node.optLong("file_size").takeIf { it > 0 }
                             ?: node.optLong("size").takeIf { it > 0 },
                         rawNodeJson = node.toString(),
-                        isRiskMatrix = isRiskMatrix,
                         nodeId = nodeId,
                         parentId = parentId
                     )
@@ -157,13 +155,7 @@ object DigitalAssetTreeParser {
                     val childNode = node.opt(i)
                     if (childNode != null) {
                         val childPath = "$currentPath[$i]"
-                        // Determine child position based on current position and index
-                        val childPosition = when (position) {
-                            TreePosition.ROOT -> if (i == 0) TreePosition.FIRST_LEVEL_CHILD else TreePosition.OTHER
-                            TreePosition.FIRST_LEVEL_CHILD -> if (i == 0) TreePosition.RISK_MATRIX_LEVEL else TreePosition.OTHER
-                            else -> TreePosition.OTHER
-                        }
-                        traverseTreeNode(childNode, childPath, assetNodes, childPosition)
+                        traverseTreeNode(childNode, childPath, assetNodes, TreePosition.CHILD)
                     }
                 }
             }
@@ -194,13 +186,7 @@ object DigitalAssetTreeParser {
                         val childNode = childValue.opt(i)
                         if (childNode != null) {
                             val childPath = "$parentPath/$fieldName[$i]"
-                            // Determine child position based on parent position and index
-                            val childPosition = when {
-                                fieldName == "children" && parentPosition == TreePosition.ROOT && i == 0 -> TreePosition.FIRST_LEVEL_CHILD
-                                fieldName == "children" && parentPosition == TreePosition.FIRST_LEVEL_CHILD && i == 0 -> TreePosition.RISK_MATRIX_LEVEL
-                                else -> TreePosition.OTHER
-                            }
-                            traverseTreeNode(childNode, childPath, assetNodes, childPosition)
+                            traverseTreeNode(childNode, childPath, assetNodes, TreePosition.CHILD)
                         }
                     }
                 }

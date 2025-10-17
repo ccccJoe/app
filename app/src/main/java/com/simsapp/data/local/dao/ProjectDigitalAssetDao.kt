@@ -59,11 +59,19 @@ interface ProjectDigitalAssetDao {
     suspend fun deleteById(id: Long)
 
     /** Delete all assets for a specific project UID. */
-    @Query("DELETE FROM project_digital_asset WHERE project_uid = :projectUid")
+    @Query("DELETE FROM project_digital_asset WHERE project_uids LIKE '%\"' || :projectUid || '\"%'")
     suspend fun deleteByProjectUid(projectUid: String)
 
+    /** Get failed downloads for a specific project UID. */
+    @Query("SELECT * FROM project_digital_asset WHERE project_uids LIKE '%\"' || :projectUid || '\"%' AND download_status = 'FAILED'")
+    suspend fun getFailedDownloadsByProjectUid(projectUid: String): List<ProjectDigitalAssetEntity>
+
+    /** Get all failed downloads. */
+    @Query("SELECT * FROM project_digital_asset WHERE download_status = 'FAILED'")
+    suspend fun getAllFailedDownloads(): List<ProjectDigitalAssetEntity>
+
     /** Get all assets for a specific project UID. */
-    @Query("SELECT * FROM project_digital_asset WHERE project_uid = :projectUid ORDER BY created_at DESC")
+    @Query("SELECT * FROM project_digital_asset WHERE project_uids LIKE '%\"' || :projectUid || '\"%' ORDER BY created_at DESC")
     suspend fun getByProjectUid(projectUid: String): List<ProjectDigitalAssetEntity>
 
     /** Get asset by node ID. */
@@ -71,11 +79,11 @@ interface ProjectDigitalAssetDao {
     suspend fun getByNodeId(nodeId: String): ProjectDigitalAssetEntity?
 
     /** Get assets by file ID. */
-    @Query("SELECT * FROM project_digital_asset WHERE file_id = :fileId")
-    suspend fun getByFileId(fileId: String): List<ProjectDigitalAssetEntity>
+    @Query("SELECT * FROM project_digital_asset WHERE file_id = :fileId LIMIT 1")
+    suspend fun getByFileId(fileId: String): ProjectDigitalAssetEntity?
 
     /** Get completed assets for a specific project UID. */
-    @Query("SELECT * FROM project_digital_asset WHERE project_uid = :projectUid AND download_status = 'COMPLETED' ORDER BY created_at DESC")
+    @Query("SELECT * FROM project_digital_asset WHERE project_uids LIKE '%\"' || :projectUid || '\"%' AND download_status = 'COMPLETED' ORDER BY created_at DESC")
     suspend fun getCompletedByProjectUid(projectUid: String): List<ProjectDigitalAssetEntity>
 
     /** Get pending downloads. */
@@ -93,6 +101,18 @@ interface ProjectDigitalAssetDao {
     /** Update local path. */
     @Query("UPDATE project_digital_asset SET local_path = :localPath, updated_at = :updatedAt WHERE node_id = :nodeId")
     suspend fun updateLocalPath(nodeId: String, localPath: String, updatedAt: Long)
+
+    /** Update download URL. */
+    @Query("UPDATE project_digital_asset SET download_url = :downloadUrl, updated_at = :updatedAt WHERE node_id = :nodeId")
+    suspend fun updateDownloadUrl(nodeId: String, downloadUrl: String, updatedAt: Long)
+
+    /** Update download URL by file ID. */
+    @Query("UPDATE project_digital_asset SET download_url = :downloadUrl, updated_at = :updatedAt WHERE file_id = :fileId")
+    suspend fun updateDownloadUrlByFileId(fileId: String, downloadUrl: String, updatedAt: Long)
+
+    /** Update type field for digital asset. */
+    @Query("UPDATE project_digital_asset SET type = :type, updated_at = :updatedAt WHERE node_id = :nodeId")
+    suspend fun updateType(nodeId: String, type: String, updatedAt: Long)
 
     /** Update content field for storing JSON data. */
     @Query("UPDATE project_digital_asset SET content = :content, updated_at = :updatedAt WHERE node_id = :nodeId")
