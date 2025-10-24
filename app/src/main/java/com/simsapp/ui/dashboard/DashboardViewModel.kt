@@ -27,8 +27,6 @@ import com.simsapp.data.local.dao.ProjectDetailDao
 import kotlinx.coroutines.flow.map
 import org.json.JSONObject
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 
 /**
  * DashboardViewModel
@@ -303,7 +301,7 @@ class DashboardViewModel @Inject constructor(
 
     // 固定的远端同步地址（来自需求），亦可在未来由配置或后端下发。
     private val projectListEndpoint: String =
-        "https://sims.ink-stone.win/zuul/sims-ym/app/project/project_list"
+        "app/project/project_list"
 
     /**
      * 函数：syncProjectsInBackground
@@ -496,5 +494,22 @@ class DashboardViewModel @Inject constructor(
             if (child != null && child.has("history_defect_list")) return child
         }
         return root
+    }
+    
+    // -------------------- 扫码功能 --------------------
+    
+    // 扫码事件流
+    private val _qrScanEvent = MutableSharedFlow<Unit>()
+    val qrScanEvent: SharedFlow<Unit> = _qrScanEvent
+    
+    /**
+     * 启动二维码扫描
+     * 触发扫码事件，由UI层监听并启动扫码Activity
+     */
+    fun startQRCodeScan() {
+        Log.d("DashboardViewModel", "Starting QR code scan")
+        viewModelScope.launch {
+            _qrScanEvent.emit(Unit)
+        }
     }
 }

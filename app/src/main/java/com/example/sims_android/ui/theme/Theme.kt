@@ -1,6 +1,5 @@
-package com.simsapp.ui.theme
+package com.example.sims_android.ui.theme
 
-import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -50,8 +49,8 @@ fun SIMSAndroidTheme(
     }
 
     MaterialTheme(
-      colorScheme = colorScheme,
-      typography = Typography,
-      content = content
+        colorScheme = colorScheme,
+        typography = androidx.compose.material3.Typography(),
+        content = content
     )
 }

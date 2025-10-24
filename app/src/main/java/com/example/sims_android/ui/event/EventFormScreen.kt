@@ -170,6 +170,9 @@ import android.util.Log
     var showAssetPreview by remember { mutableStateOf(false) }
     var previewAsset by remember { mutableStateOf<DigitalAssetDetail?>(null) }
     
+    // 新增：存储从数据库加载的事件UID
+    var loadedEventUid by remember { mutableStateOf<String?>(null) }
+    
     // 新增：数字资产文件名状态
     var digitalAssetFileNames by remember { mutableStateOf<List<String>>(emptyList()) }
     
@@ -407,6 +410,7 @@ import android.util.Log
                         location = eventEntity.location ?: ""
                         description = eventEntity.content
                         eventRoomId = eventEntity.eventId
+                        loadedEventUid = eventEntity.uid // 存储事件UID
                         
                         // 回显风险评估结果
                         if (eventEntity.riskLevel != null && eventEntity.riskScore != null) {
@@ -1211,11 +1215,9 @@ import android.util.Log
                         scope.launch {
                             try {
                                 val currentEventId = eventId.toLongOrNull()
-                                if (currentEventId != null) {
-                                    // 使用eventId作为本地文件夹标识符
-                                    val eventUid = currentEventId.toString()
-                                    
-                                    val result = viewModel.deleteEvent(currentEventId, eventUid)
+                                if (currentEventId != null && loadedEventUid != null) {
+                                    // 使用从数据库加载的真实UID
+                                    val result = viewModel.deleteEvent(currentEventId, loadedEventUid!!)
                                     if (result.isSuccess) {
                                         isDeleted = true // 标记为已删除，阻止自动保�?
                                         Toast.makeText(context, "Event deleted successfully", Toast.LENGTH_SHORT).show()
@@ -1224,7 +1226,7 @@ import android.util.Log
                                         Toast.makeText(context, "Failed to delete event: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                                     }
                                 } else {
-                                    Toast.makeText(context, "Invalid event ID", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Invalid event ID or UID", Toast.LENGTH_SHORT).show()
                                 }
                             } catch (e: Exception) {
                                 Toast.makeText(context, "Error deleting event: ${e.message}", Toast.LENGTH_LONG).show()

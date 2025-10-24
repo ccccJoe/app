@@ -5,15 +5,16 @@
  */
 package com.simsapp
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.simsapp.ui.dashboard.DashboardScreen
-import com.simsapp.ui.dashboard.ProjectCardData
+import com.example.sims_android.ui.dashboard.DashboardScreen
+import com.example.sims_android.ui.dashboard.ProjectCardData
 import com.example.sims_android.ui.event.EventFormScreen
 import com.simsapp.ui.project.ProjectDetailScreen
-import com.simsapp.ui.theme.SIMSAndroidTheme
+import com.example.sims_android.ui.theme.SIMSAndroidTheme
 import dagger.hilt.android.AndroidEntryPoint
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.simsapp.ui.auth.QRScanActivity
 
 /**
  * MainActivity
@@ -212,15 +214,29 @@ class MainActivity : ComponentActivity() {
                         composable(route = AppDestination.Dashboard.route) {
                             DashboardScreen(
                                 onProjectClick = { clicked ->
-                                    navController.navigate(
-                                        AppDestination.ProjectDetail.route(clicked.name, clicked.projectUid)
-                                    )
+                                    // Check if project is deleted before navigation
+                                    if (clicked.isDeleted) {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "This project has been deleted and cannot be viewed.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    } else {
+                                        navController.navigate(
+                                            AppDestination.ProjectDetail.route(clicked.name, clicked.projectUid)
+                                        )
+                                    }
                                 },
                                 onEventCreate = {
                                     navController.navigate(AppDestination.Event.route())
                                 },
                                 onCleanClick = {
                                     navController.navigate(AppDestination.ProjectCleanup.route())
+                                },
+                                onQRScanClick = {
+                                    // 启动二维码扫描Activity
+                                    val intent = Intent(this@MainActivity, QRScanActivity::class.java)
+                                    startActivity(intent)
                                 },
                                 viewModel = dashboardViewModel
                             )

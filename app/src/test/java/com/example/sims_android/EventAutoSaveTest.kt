@@ -91,6 +91,7 @@ class EventAutoSaveTest {
         // 创建EventEntity
         val eventEntity = EventEntity(
             eventId = 1L,
+            uid = "test-event-uuid-001",
             projectId = 100L,
             projectUid = "PROJECT_001",
             location = "Test Location",

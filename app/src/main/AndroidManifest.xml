@@ -58,6 +58,12 @@
             </intent-filter>
         </activity>
         
+        <!-- QR Code Scan Activity -->
+        <activity
+            android:name="com.simsapp.ui.auth.QRScanActivity"
+            android:exported="false"
+            android:theme="@style/Theme.SIMSAndroid" />
+        
 
     </application>
 

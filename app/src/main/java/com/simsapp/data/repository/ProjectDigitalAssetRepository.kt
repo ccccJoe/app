@@ -39,7 +39,7 @@ class ProjectDigitalAssetRepository @Inject constructor(
 ) {
 
     companion object {
-        private const val DOWNLOAD_URL_ENDPOINT = "https://sims.ink-stone.win/zuul/sims-ym/storage/download/url"
+        private const val DOWNLOAD_URL_ENDPOINT = "storage/download/url"
         private const val DIGITAL_ASSETS_DIR = "digital_assets"
     }
 

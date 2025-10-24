@@ -29,12 +29,15 @@ import androidx.room.PrimaryKey
     ],
     indices = [
         Index(value = ["project_id"]),
-        Index(value = ["project_uid"])
+        Index(value = ["project_uid"]),
+        Index(value = ["uid"], unique = true)
     ]
 )
 data class EventEntity(
     /** Primary key of the event (auto-generated). */
     @PrimaryKey(autoGenerate = true) @ColumnInfo(name = "event_id") val eventId: Long = 0,
+    /** Event unique identifier (UUID) used for file system directory naming. */
+    @ColumnInfo(name = "uid", defaultValue = "") val uid: String = "",
     /** Project foreign key. */
     @ColumnInfo(name = "project_id") val projectId: Long,
     /** Project unique identifier for direct association without joins. */

@@ -1,4 +1,4 @@
-package com.simsapp.ui.theme
+package com.example.sims_android.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

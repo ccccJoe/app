@@ -227,9 +227,11 @@ class EventFormViewModel @Inject constructor(
             }
             
             val entity = if (isEditMode && currentEventId != null && currentEventId > 0) {
-                // 编辑模式：更新现有事件
+                // 编辑模式：更新现有事件，保持原有的uid
+                val existingEvent = eventRepo.getEventById(currentEventId)
                 EventEntity(
                     eventId = currentEventId,
+                    uid = existingEvent?.uid ?: java.util.UUID.randomUUID().toString(),
                     projectId = pid,
                     projectUid = projectUid,
                     defectIds = defectIds,
@@ -246,9 +248,10 @@ class EventFormViewModel @Inject constructor(
                     isDraft = true
                 )
             } else {
-                // 新建模式：创建新事件
+                // 新建模式：创建新事件，生成新的UUID
                 EventEntity(
                     eventId = 0L, // 让数据库自动生成ID
+                    uid = java.util.UUID.randomUUID().toString(),
                     projectId = pid,
                     projectUid = projectUid,
                     defectIds = defectIds,
@@ -267,6 +270,66 @@ class EventFormViewModel @Inject constructor(
             }
             
             val id = eventRepo.upsert(entity)
+            
+            // 确保事件目录存在（新增逻辑）
+            val eventUid = entity.uid
+            val eventDir = File(appContext.filesDir, "events/$eventUid")
+            if (!eventDir.exists()) {
+                Log.d("EventFormVM", "Creating event directory: ${eventDir.absolutePath}")
+                eventDir.mkdirs()
+                
+                // 创建meta.json文件
+                val metaData = mapOf(
+                    "eventId" to id,
+                    "uid" to eventUid,
+                    "projectId" to pid,
+                    "projectUid" to projectUid,
+                    "location" to (location ?: ""),
+                    "content" to description,
+                    "lastEditTime" to now,
+                    "riskLevel" to (riskResult?.level ?: ""),
+                    "riskScore" to (riskResult?.score ?: 0.0),
+                    "photoFiles" to photoFilePaths,
+                    "audioFiles" to audioFilePaths,
+                    "defectIds" to defectIds,
+                    "defectNos" to defectNos,
+                    "isDraft" to true
+                )
+                
+                val metaFile = File(eventDir, "meta.json")
+                try {
+                    metaFile.writeText(gson.toJson(metaData))
+                    Log.d("EventFormVM", "Created meta.json for event: $eventUid")
+                } catch (e: Exception) {
+                    Log.w("EventFormVM", "Failed to create meta.json for event $eventUid: ${e.message}")
+                }
+                
+                // 复制图片文件到事件目录
+                photoFiles.forEachIndexed { index, file ->
+                    try {
+                        val targetFile = File(eventDir, "photo_$index.jpg")
+                        file.copyTo(targetFile, overwrite = true)
+                        Log.d("EventFormVM", "Copied photo file: ${file.name} -> ${targetFile.name}")
+                    } catch (e: Exception) {
+                        Log.w("EventFormVM", "Failed to copy photo file ${file.name}: ${e.message}")
+                    }
+                }
+                
+                // 复制音频文件到事件目录
+                audioFiles.forEachIndexed { index, file ->
+                    try {
+                        val targetFile = File(eventDir, "audio_$index.m4a")
+                        file.copyTo(targetFile, overwrite = true)
+                        Log.d("EventFormVM", "Copied audio file: ${file.name} -> ${targetFile.name}")
+                    } catch (e: Exception) {
+                        Log.w("EventFormVM", "Failed to copy audio file ${file.name}: ${e.message}")
+                    }
+                }
+                
+                Log.d("EventFormVM", "Event directory created successfully: ${eventDir.absolutePath}")
+            } else {
+                Log.d("EventFormVM", "Event directory already exists: ${eventDir.absolutePath}")
+            }
             
             // 更新关联缺陷的event_count字段
             updateDefectEventCounts(

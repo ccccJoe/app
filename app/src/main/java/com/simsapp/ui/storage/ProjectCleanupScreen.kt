@@ -24,6 +24,10 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.simsapp.data.local.entity.ProjectEntity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * ProjectCleanupScreen
@@ -252,12 +256,23 @@ fun ProjectCleanupScreen(
             kotlinx.coroutines.delay(2000)
             viewModel.clearCleanupResult()
             if (result.isSuccess) {
+                // 延迟导航，确保状态清理完成后再执行导航
+                delay(100) // 短暂延迟确保状态更新完成
                 onNavigateBack()
             }
         }
         
         AlertDialog(
-            onDismissRequest = { viewModel.clearCleanupResult() },
+            onDismissRequest = { 
+                viewModel.clearCleanupResult()
+                if (uiState.cleanupResult?.isSuccess == true) {
+                    // 延迟导航，确保状态清理完成后再执行导航
+                    CoroutineScope(Dispatchers.Main).launch {
+                        delay(100) // 短暂延迟确保状态更新完成
+                        onNavigateBack()
+                    }
+                }
+            },
             title = { 
                 Text(if (result.isSuccess) "Cleanup Complete" else "Cleanup Failed") 
             },
@@ -266,7 +281,11 @@ fun ProjectCleanupScreen(
                 TextButton(onClick = { 
                     viewModel.clearCleanupResult()
                     if (result.isSuccess) {
-                        onNavigateBack()
+                        // 延迟导航，确保状态清理完成后再执行导航
+                        CoroutineScope(Dispatchers.Main).launch {
+                            delay(100) // 短暂延迟确保状态更新完成
+                            onNavigateBack()
+                        }
                     }
                 }) {
                     Text("OK")

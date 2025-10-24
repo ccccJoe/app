@@ -128,7 +128,7 @@ class ProjectRepository @Inject constructor(
      * 2. 使用返回结果中的 data[0].url（接口可能直接返回纯文本URL或 JSON）来下载风险矩阵 JSON
      * 3. 解析为 RiskMatrixPayload 返回
      *
-     * @param endpoint 完整解析接口 URL，例如：https://sims.ink-stone.win/zuul/sims-ym/storage/download/url
+     * @param endpoint 完整解析接口 URL，例如：/storage/download/url
      * @param fileIds 文件ID列表（仅使用首个）
      */
     suspend fun fetchRiskMatrix(endpoint: String, fileIds: List<String>): Result<RiskMatrixPayload> {
@@ -186,7 +186,7 @@ class ProjectRepository @Inject constructor(
 
     // 新增：项目详情接口固定端点（不含查询参数）
     private val projectDetailEndpoint: String =
-        "https://sims.ink-stone.win/zuul/sims-ym/app/project/project"
+        "app/project/project"
 
     /**
      * 函数：syncProjectsFromEndpoint
@@ -525,6 +525,20 @@ class ProjectRepository @Inject constructor(
     }
 
     /**
+     * 标记项目为已删除状态（软删除）
+     * @param projectIds 要标记为已删除的项目ID列表
+     * @return 操作结果
+     */
+    suspend fun markProjectsAsDeleted(projectIds: List<Long>): DeleteResult {
+        return try {
+            projectDao.markAsDeleted(projectIds)
+            DeleteResult(isSuccess = true)
+        } catch (e: Exception) {
+            DeleteResult(isSuccess = false, errorMessage = e.message)
+        }
+    }
+
+    /**
      * 函数：updateProjectCounts
      * 说明：根据数据库中实际的defect和event数据更新项目的defect_count和event_count字段
      * - defect_count: 该项目下所有缺陷的数量（优先使用defect表，如果为空则从ProjectDetail解析）
@@ -666,7 +680,7 @@ class ProjectRepository @Inject constructor(
     // ... existing code ...
     // 新增：历史缺陷图片下载链接解析端点
     private val storageDownloadEndpoint: String =
-        "https://sims.ink-stone.win/zuul/sims-ym/storage/download/url"
+        "storage/download/url"
 
     /**
      * 解析项目详情 JSON，遍历 history_defect_list：

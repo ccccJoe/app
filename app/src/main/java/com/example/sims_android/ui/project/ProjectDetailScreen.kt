@@ -355,6 +355,36 @@ fun ProjectDetailScreen(
                     selectedIds = selectedEventIds,
                     onToggle = { id -> if (selectedEventIds.contains(id)) selectedEventIds.remove(id) else selectedEventIds.add(id) },
                     onOpen = { id -> onOpenEvent(id) },
+                    onSync = { eventId ->
+                        // 单个事件同步逻辑
+                        scope.launch {
+                            // 1) 提示：同步初始化中
+                            Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
+                            // 2) 展示转圈：将当前事件ID标记为上传中
+                            uploadingIds.clear()
+                            uploadingIds.add(eventId)
+                            // 3) 调用单个事件同步方法
+                            runCatching {
+                                // 根据eventId查找对应的EventItem获取uid
+                                val eventItem = events.find { it.id == eventId }
+                                if (eventItem == null) {
+                                    throw IllegalArgumentException("Event not found with id: $eventId")
+                                }
+                                val result = viewModel.uploadSingleEvent(
+                                eventUid = eventItem.uid, // 使用uid而不是id
+                                projectUid = projectUid ?: ""
+                            )
+                                // 上传完成后清除转圈状态
+                                uploadingIds.clear()
+                                // 显示上传结果
+                                Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
+                            }.onFailure { exception ->
+                                // 失败场景：清除转圈状态并显示错误信息
+                                uploadingIds.clear()
+                                Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
                     uploadingIds = uploadingIds,
                     events = events
                 )
@@ -381,25 +411,32 @@ fun ProjectDetailScreen(
                                 if (ids.isEmpty()) return@Button
                                 scope.launch {
                                     // 1) 提示：同步初始化中
-                                Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
                                     // 2) 展示逐项转圈：先将所有选中 ID 标记为上传中
                                     uploadingIds.clear()
                                     uploadingIds.addAll(ids)
-                                    // 3) 逐项上传，完成后从集合中移除以关闭对应转圈
-                                    for (id in ids) {
-                                        runCatching {
-                                            viewModel.uploadSelectedEvents(
-                                                context = context,
-                                                eventUids = listOf(id)
-                                            )
-                                        }.onFailure {
-                                            // 失败场景：这里先简单忽略，仅移除转圈；可在后续增强中增加失败提示
+                                    // 3) 批量上传所有选中的事件
+                                    runCatching {
+                                        val result = viewModel.uploadSelectedEvents(
+                                            context = context,
+                                            eventUids = ids.mapNotNull { id -> 
+                                                events.find { it.id == id }?.uid 
+                                            }, // 将id转换为uid传递
+                                            projectUid = projectUid ?: ""
+                                        )
+                                        // 上传完成后清除所有转圈状态
+                                        uploadingIds.clear()
+                                        // 显示上传结果
+                                        if (result.first) {
+                                            Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Sync failed: ${result.second}", Toast.LENGTH_LONG).show()
                                         }
-                                        // 移除当前完成的 ID，以停止对应行的转圈
-                                        uploadingIds.remove(id)
+                                    }.onFailure { exception ->
+                                        // 失败场景：清除转圈状态并显示错误信息
+                                        uploadingIds.clear()
+                                        Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
                                     }
-                                    // 4) 全部完成提示：同步成功
-                                Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             shape = RoundedCornerShape(8.dp)
@@ -1125,6 +1162,7 @@ private fun DefectList(
  * @param selectedIds 已选中的事件 ID 集合（只读，用于决定复选框状态）
  * @param onToggle 切换选中状态的回调
  * @param onOpen 打开事件详情的回调
+ * @param onSync 单个事件同步的回调
  * @param uploadingIds 正在上传中的事件 ID 集合（用于在标题前显示转圈）
  * @param events 事件列表数据
  */
@@ -1136,6 +1174,7 @@ private fun EventList(
     selectedIds: List<String>,
     onToggle: (String) -> Unit,
     onOpen: (String) -> Unit,
+    onSync: (String) -> Unit,
     uploadingIds: List<String>,
     events: List<EventItem>
 ) {
@@ -1162,7 +1201,8 @@ private fun EventList(
                 checked = checked,
                 uploading = uploading,
                 onToggle = { onToggle(item.id) },
-                onOpen = { onOpen(item.id) }
+                onOpen = { onOpen(item.id) },
+                onSync = { onSync(item.id) }
             )
         }
     }
@@ -1216,7 +1256,8 @@ private fun RiskTag(risk: String) {
  * 说明：为满足当前 ProjectDetailScreen 的编译需求，提供最小字段集合。
  */
 data class EventItem(
-    val id: String,
+    val id: String,        // 事件ID（数据库主键），用于数据库查询和导航
+    val uid: String,       // 事件UID（唯一标识），用于文件系统目录定位和删除操作
     val title: String,
     val location: String,
     val defectNo: String,
@@ -1226,6 +1267,7 @@ data class EventItem(
 /**
  * One item card of Event list.
  * 在 selectionMode 下显示复选框并支持整卡点击切换选中。
+ * 在非选择模式下显示同步按钮，支持单个事件同步。
  * 变更：当 uploading == true 时，在标题前展示一个小号 CircularProgressIndicator。
  * 参数：
  * - item: 事件项数据。
@@ -1234,6 +1276,7 @@ data class EventItem(
  * - uploading: 当前项是否处于上传中状态。
  * - onToggle: 选择模式下切换选中回调。
  * - onOpen: 非选择模式下打开详情回调。
+ * - onSync: 非选择模式下单个事件同步回调。
  */
 @Composable
 private fun EventCard(
@@ -1242,9 +1285,10 @@ private fun EventCard(
     checked: Boolean,
     uploading: Boolean,
     onToggle: () -> Unit,
-    onOpen: () -> Unit
+    onOpen: () -> Unit,
+    onSync: () -> Unit = {}
 ) {
-    val rowModifier = if (selectionMode) Modifier.clickable { onToggle() } else Modifier.clickable { onOpen() }
+    val rowModifier = if (selectionMode) Modifier.clickable { onToggle() } else Modifier
     Card(
         modifier = rowModifier
             .fillMaxWidth()
@@ -1263,17 +1307,71 @@ private fun EventCard(
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                     Spacer(modifier = Modifier.width(6.dp))
                 }
-                Text(text = item.title, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Text(
+                    text = item.title, 
+                    fontWeight = FontWeight.SemiBold, 
+                    fontSize = 14.sp,
+                    modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
+                )
             }
             Spacer(modifier = Modifier.height(6.dp))
-            Text(text = "Location: ${item.location}", fontSize = 12.sp, color = Color(0xFF666666))
-            Text(text = "DefectNo: ${item.defectNo}", fontSize = 12.sp, color = Color(0xFF666666))
+            Text(
+                text = "Location: ${item.location}", 
+                fontSize = 12.sp, 
+                color = Color(0xFF666666),
+                modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
+            )
+            Text(
+                text = "DefectNo: ${item.defectNo}", 
+                fontSize = 12.sp, 
+                color = Color(0xFF666666),
+                modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
+            )
             Spacer(modifier = Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = item.date, fontSize = 11.sp, color = Color(0xFF9E9E9E))
+                Text(
+                    text = item.date, 
+                    fontSize = 11.sp, 
+                    color = Color(0xFF9E9E9E),
+                    modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
+                )
                 Spacer(modifier = Modifier.weight(1f))
                 if (!selectionMode) {
-                    Text(text = "Details >", color = Color(0xFF4A90E2), fontSize = 12.sp)
+                    // 同步按钮
+                    Button(
+                        onClick = onSync,
+                        enabled = !uploading,
+                        modifier = Modifier
+                            .height(28.dp)
+                            .width(60.dp),
+                        shape = RoundedCornerShape(6.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4A90E2)
+                        ),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        if (uploading) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                strokeWidth = 1.5.dp,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        } else {
+                            Text(
+                                text = "Sync",
+                                fontSize = 10.sp,
+                                color = Color.White,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Details >", 
+                        color = Color(0xFF4A90E2), 
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable { onOpen() }
+                    )
                 }
             }
         }

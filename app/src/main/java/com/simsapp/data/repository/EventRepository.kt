@@ -99,19 +99,37 @@ class EventRepository @Inject constructor(
             val jsonString = gson.toJson(requestData)
             val requestBody = jsonString.toRequestBody("application/json".toMediaTypeOrNull())
             
+            // 添加详细日志
+            android.util.Log.d("EventRepository", "Creating event upload request:")
+            android.util.Log.d("EventRepository", "Task UID: $taskUid")
+            android.util.Log.d("EventRepository", "Target Project UID: $targetProjectUid")
+            android.util.Log.d("EventRepository", "Upload List Size: ${uploadList.size}")
+            android.util.Log.d("EventRepository", "Upload List Details:")
+            uploadList.forEachIndexed { index, item ->
+                android.util.Log.d("EventRepository", "  Item $index: eventUid=${item.eventUid}, hash=${item.eventPackageHash}, name=${item.eventPackageName}")
+            }
+            android.util.Log.d("EventRepository", "Request JSON: $jsonString")
+            
             val response = api.createEventUpload(
-                endpoint = "https://sims.ink-stone.win/zuul/sims-ym/app/event/create_event_upload",
+                endpoint = "app/event/create_event_upload",
                 requestBody = requestBody
             )
             
+            android.util.Log.d("EventRepository", "API Response Code: ${response.code()}")
+            android.util.Log.d("EventRepository", "API Response Success: ${response.isSuccessful}")
+            
             if (response.isSuccessful) {
                 val responseText = response.body()?.string() ?: ""
+                android.util.Log.d("EventRepository", "API Response Body: $responseText")
                 val uploadResponse = gson.fromJson(responseText, EventUploadResponse::class.java)
                 true to uploadResponse
             } else {
+                val errorBody = response.errorBody()?.string() ?: "Unknown error"
+                android.util.Log.e("EventRepository", "API Error: $errorBody")
                 false to null
             }
         } catch (e: Exception) {
+            android.util.Log.e("EventRepository", "Exception in createEventUpload: ${e.message}", e)
             false to null
         }
     }
@@ -123,21 +141,33 @@ class EventRepository @Inject constructor(
      */
     suspend fun noticeEventUploadSuccess(taskUid: String): Pair<Boolean, Boolean> {
         return try {
+            android.util.Log.d("EventRepository", "Polling upload status for task: $taskUid")
+            
             val response = api.noticeEventUploadSuccess(
-                endpoint = "https://sims.ink-stone.win/zuul/sims-ym/app/event/notice_event_upload_success",
+                endpoint = "app/event/notice_event_upload_success",
                 taskUid = taskUid
             )
             
+            android.util.Log.d("EventRepository", "Status polling response code: ${response.code()}")
+            
             if (response.isSuccessful) {
                 val responseText = response.body()?.string() ?: ""
+                android.util.Log.d("EventRepository", "Status polling response body: $responseText")
+                
                 // 假设返回的是 JSON 格式，包含 success 字段表示是否完成
                 val gson = com.google.gson.Gson()
                 val result = gson.fromJson(responseText, EventUploadStatusResponse::class.java)
+                
+                android.util.Log.d("EventRepository", "Parsed status result: success=${result?.success}, code=${result?.code}, message=${result?.message}")
+                
                 true to (result?.success == true)
             } else {
+                val errorBody = response.errorBody()?.string() ?: "Unknown error"
+                android.util.Log.e("EventRepository", "Status polling failed with code ${response.code()}: $errorBody")
                 false to false
             }
         } catch (e: Exception) {
+            android.util.Log.e("EventRepository", "Status polling exception: ${e.message}", e)
             false to false
         }
     }
@@ -153,8 +183,22 @@ class EventRepository @Inject constructor(
         context: Context,
         eventUid: String
     ): Pair<Boolean, String> {
+        android.util.Log.d("EventRepository", "Creating zip for event: $eventUid")
+        
         val eventDir = File(File(context.filesDir, "events"), eventUid)
-        if (!eventDir.exists()) return false to "event directory not found: ${eventDir.absolutePath}"
+        android.util.Log.d("EventRepository", "Event directory path: ${eventDir.absolutePath}")
+        
+        if (!eventDir.exists()) {
+            android.util.Log.e("EventRepository", "Event directory not found: ${eventDir.absolutePath}")
+            return false to "event directory not found: ${eventDir.absolutePath}"
+        }
+
+        // 检查目录内容
+        val files = eventDir.listFiles()
+        android.util.Log.d("EventRepository", "Event directory contains ${files?.size ?: 0} files:")
+        files?.forEach { file ->
+            android.util.Log.d("EventRepository", "  - ${file.name} (${if (file.isDirectory) "DIR" else "FILE"}, ${file.length()} bytes)")
+        }
 
         // Fix legacy placeholder extensions in meta.json and on disk before zipping (one-time migration)
         fixLegacyPlaceholderExtensions(eventDir)
@@ -162,9 +206,13 @@ class EventRepository @Inject constructor(
         // 1) 压缩为zip
         val cacheDir = File(context.cacheDir, "sync_zip").apply { mkdirs() }
         val zipFile = File(cacheDir, "event-$eventUid-${System.currentTimeMillis()}.zip")
+        android.util.Log.d("EventRepository", "Creating zip file: ${zipFile.absolutePath}")
+        
         try {
             zipDirectory(eventDir, zipFile)
+            android.util.Log.d("EventRepository", "Zip file created successfully, size: ${zipFile.length()} bytes")
         } catch (e: Exception) {
+            android.util.Log.e("EventRepository", "Zip creation failed for event $eventUid", e)
             return false to "zip error: ${e.message}"
         }
 
@@ -253,19 +301,48 @@ class EventRepository @Inject constructor(
 
     /** 递归压缩目录 */
     private fun zipDirectory(srcDir: File, outZip: File) {
+        android.util.Log.d("EventRepository", "Starting zip compression from ${srcDir.absolutePath} to ${outZip.absolutePath}")
+        
         ZipOutputStream(FileOutputStream(outZip)).use { zos ->
             val basePath = srcDir.absolutePath
-            srcDir.walkTopDown().filter { it.isFile }.forEach { file ->
+            val filesToZip = srcDir.walkTopDown().filter { it.isFile }.toList()
+            
+            android.util.Log.d("EventRepository", "Found ${filesToZip.size} files to compress:")
+            filesToZip.forEach { file ->
+                android.util.Log.d("EventRepository", "  - ${file.absolutePath} (${file.length()} bytes)")
+            }
+            
+            if (filesToZip.isEmpty()) {
+                android.util.Log.w("EventRepository", "No files found in directory ${srcDir.absolutePath}")
+                // 创建一个空的zip文件，至少包含目录结构
+                val entry = ZipEntry("empty.txt")
+                zos.putNextEntry(entry)
+                zos.write("This directory was empty during compression.".toByteArray())
+                zos.closeEntry()
+                return@use
+            }
+            
+            filesToZip.forEach { file ->
                 val rel = file.absolutePath.removePrefix(basePath).trimStart(File.separatorChar)
                 val entryName = if (rel.isBlank()) file.name else rel
-                val entry = ZipEntry(entryName)
-                zos.putNextEntry(entry)
-                FileInputStream(file).use { fis ->
-                    fis.copyTo(zos)
+                android.util.Log.d("EventRepository", "Adding file to zip: $entryName")
+                
+                try {
+                    val entry = ZipEntry(entryName)
+                    zos.putNextEntry(entry)
+                    FileInputStream(file).use { fis ->
+                        fis.copyTo(zos)
+                    }
+                    zos.closeEntry()
+                    android.util.Log.d("EventRepository", "Successfully added $entryName to zip")
+                } catch (e: Exception) {
+                    android.util.Log.e("EventRepository", "Failed to add file $entryName to zip", e)
+                    throw e
                 }
-                zos.closeEntry()
             }
         }
+        
+        android.util.Log.d("EventRepository", "Zip compression completed. Final zip size: ${outZip.length()} bytes")
     }
 
     /** 计算文件SHA-256并转十六进制字符串 */

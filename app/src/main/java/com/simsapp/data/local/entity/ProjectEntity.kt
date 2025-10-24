@@ -41,5 +41,7 @@ data class ProjectEntity(
     /** Count of related defects for quick dashboard access. */
     @ColumnInfo(name = "defect_count") val defectCount: Int = 0,
     /** Count of related events for quick dashboard access. */
-    @ColumnInfo(name = "event_count") val eventCount: Int = 0
+    @ColumnInfo(name = "event_count") val eventCount: Int = 0,
+    /** Flag indicating if the project has been marked as deleted/cleaned up. */
+    @ColumnInfo(name = "is_deleted", defaultValue = "0") val isDeleted: Boolean = false
 )

@@ -3,7 +3,7 @@
  * 说明：首页仪表盘界面，展示项目统计、图表和项目列表
  * 作者：SIMS-Android 开发团队
  */
-package com.simsapp.ui.dashboard
+package com.example.sims_android.ui.dashboard
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,15 +25,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
-import com.simsapp.ui.common.PieChart
-import com.simsapp.ui.common.BarChart
+import com.example.sims_android.ui.common.PieChart
+import com.example.sims_android.ui.common.BarChart
+import com.example.sims_android.ui.common.PublicKeyDialog
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.simsapp.data.local.entity.ProjectEntity
+import com.simsapp.ui.dashboard.DashboardViewModel
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.runBlocking
@@ -64,6 +69,8 @@ fun DashboardScreen(
     onEventCreate: () -> Unit = {},
     onSyncClick: () -> Unit = {},
     onCleanClick: () -> Unit = {},
+    onQRScanClick: () -> Unit = {},
+    onKeyClick: () -> Unit = {},
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
 
@@ -145,6 +152,9 @@ fun DashboardScreen(
 
     // 新增：同步确认弹窗的显隐状态
     var showSyncConfirm by remember { mutableStateOf(false) }
+    
+    // 新增：公钥弹窗的显隐状态
+    var showPublicKeyDialog by remember { mutableStateOf(false) }
 
     // 页面背景色
     Box(
@@ -163,7 +173,9 @@ fun DashboardScreen(
             item {
                 DashboardHeaderSection(
                     pieChartData = pieChartData,
-                    barChartData = barChartData
+                    barChartData = barChartData,
+                    onQRScanClick = onQRScanClick,
+                    onKeyClick = { showPublicKeyDialog = true }
                 )
             }
             
@@ -219,6 +231,13 @@ fun DashboardScreen(
                 viewModel = viewModel
             )
         }
+        
+        // 公钥显示弹窗
+        if (showPublicKeyDialog) {
+            PublicKeyDialog(
+                onDismiss = { showPublicKeyDialog = false }
+            )
+        }
         // Snackbar反馈：仅保留清理状态；同步成功/失败通过一次性事件处理
         LaunchedEffect(cleanState) {
             if (!cleanState.isLoading) {
@@ -244,7 +263,9 @@ fun DashboardScreen(
 @Composable
 private fun DashboardHeaderSection(
     pieChartData: List<Pair<String, Float>>,
-    barChartData: List<Triple<String, String, Float>>
+    barChartData: List<Triple<String, String, Float>>,
+    onQRScanClick: () -> Unit = {},
+    onKeyClick: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
@@ -259,14 +280,53 @@ private fun DashboardHeaderSection(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            // Dashboard标题
-            Text(
-                text = "Dashboard",
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
+            // Dashboard标题行，包含标题和图标按钮
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Dashboard",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                // 右侧图标按钮组
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 钥匙图标按钮
+                    IconButton(
+                        onClick = onKeyClick,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = "Public Key",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    
+                    // 扫码图标按钮
+                    IconButton(
+                        onClick = onQRScanClick,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = "QR Code Scan",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            }
             
             // 统计图表区域
             StatisticsSection(
@@ -455,7 +515,8 @@ data class ProjectCardData(
     val endDate: String,
     val status: String,
     val projectUid: String?,
-    val inspectionEndAt: Long? = null
+    val inspectionEndAt: Long? = null,
+    val isDeleted: Boolean = false
 )
 
 /**
@@ -471,7 +532,8 @@ private fun ProjectEntity.toCard(): ProjectCardData = ProjectCardData(
     eventCount = 0,
     endDate = this.endDate?.let { formatEpochMillisToDateString(it) } ?: "",
     status = this.status,
-    projectUid = this.projectUid // 新增映射
+    projectUid = this.projectUid, // 新增映射
+    isDeleted = this.isDeleted
 )
 
 /**
@@ -665,38 +727,54 @@ private fun ProjectCard(project: ProjectCardData, onClick: () -> Unit = {}) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     StatusTag(status = project.status)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = project.name,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Medium,
-                        color = Color(0xFF333333)
+                        color = if (project.isDeleted) Color(0xFF999999) else Color(0xFF333333),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
+                    // 为已清除项目添加标识
+                    if (project.isDeleted) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "[DELETED]",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFB00020)
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 // 展示历史缺陷数量（来源于缓存详情的 history_defect_list 条数）
                 Text(
                     text = "Historical Defects: ${project.defectCount}",
                     fontSize = 12.sp,
-                    color = Color(0xFF666666)
+                    color = if (project.isDeleted) Color(0xFFCCCCCC) else Color(0xFF666666)
                 )
                 Text(
                     text = "Events Quantity: ${project.eventCount}",
                     fontSize = 12.sp,
-                    color = Color(0xFF666666)
+                    color = if (project.isDeleted) Color(0xFFCCCCCC) else Color(0xFF666666)
                 )
                 Text(
                     text = "Updated at: ${project.endDate}",
                     fontSize = 12.sp,
-                    color = Color(0xFF999999)
+                    color = if (project.isDeleted) Color(0xFFCCCCCC) else Color(0xFF999999)
                 )
             }
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = "Go",
-                tint = Color(0xFFCCCCCC)
+                tint = if (project.isDeleted) Color(0xFFEEEEEE) else Color(0xFFCCCCCC)
             )
         }
     }

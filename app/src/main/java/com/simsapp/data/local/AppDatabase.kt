@@ -37,7 +37,7 @@ import com.simsapp.data.local.entity.ProjectEntity
         ProjectDetailEntity::class,
         ProjectDigitalAssetEntity::class
     ],
-    version = 13, // 增加版本号以支持数字资产表结构调整
+    version = 15, // 增加版本号以支持EventEntity的uid字段
     exportSchema = true
 )
 @TypeConverters(Converters::class)

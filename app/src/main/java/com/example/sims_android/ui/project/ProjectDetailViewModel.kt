@@ -5,9 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.simsapp.data.local.dao.ProjectDetailDao
 import com.simsapp.data.local.dao.ProjectDao
+import com.simsapp.data.local.dao.EventDao
 import com.simsapp.data.local.entity.DefectEntity
 import com.simsapp.data.repository.DefectRepository
 import com.simsapp.data.repository.EventRepository
+import com.simsapp.data.repository.EventUploadItem
+import com.simsapp.utils.EventDirectoryMigrationUtil
+import com.google.gson.Gson
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -57,6 +61,8 @@ class ProjectDetailViewModel @Inject constructor(
     private val projectDetailDao: ProjectDetailDao,
     private val projectDao: ProjectDao,
     private val defectRepository: DefectRepository,
+    private val eventDao: EventDao,
+    private val gson: Gson,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -119,7 +125,8 @@ class ProjectDetailViewModel @Inject constructor(
                 eventRepository.getEventsByProjectUid(projectUid).collect { eventEntities ->
                     val eventItems = eventEntities.map { entity ->
                         EventItem(
-                            id = entity.eventId.toString(),
+                            id = entity.eventId.toString(), // 使用eventId作为主键标识，用于数据库查询
+                            uid = entity.uid, // 添加uid字段，用于文件系统目录定位和删除操作
                             title = if (entity.content.isNotBlank()) {
                                 entity.content.take(50) + if (entity.content.length > 50) "..." else ""
                             } else "Event ${entity.eventId}",
@@ -211,40 +218,218 @@ class ProjectDetailViewModel @Inject constructor(
 
     // ---------------- Event Upload (existing) ----------------
     /**
-     * Upload zip packages for selected events sequentially and return a merged textual report.
-     *
-     * Note: X-USERNAME and Authorization headers are injected by a global OkHttp interceptor by default.
-     *       UI layer is not required to pass these headers. Parameters below exist only for explicit override.
-     *
-     * @param context Optional Android context used to locate local event directory. If null, use appContext.
-     * @param eventUids The selected event identifiers (used as local directory names)
-     * @param username The X-USERNAME header value; optional override for interceptor default
-     * @param authorization Authorization header like "Bearer <token>"; optional override for interceptor default
-     * @return A human-readable multi-line string showing each event's upload result
+     * 函数：uploadSelectedEvents
+     * 说明：批量上传选中的事件到云端
+     * 实现完整的同步流程：打包 -> 生成hash -> 调用接口 -> 上传到OSS -> 轮询状态
+     * 
+     * @param context Android上下文
+     * @param eventUids 事件UID列表
+     * @param projectUid 当前项目的UID
+     * @return Pair<Boolean, String> 成功标志和消息
      */
-    suspend fun uploadSelectedEvents(
-        context: Context?,
-        eventUids: List<String>,
-        username: String = "test",
-        authorization: String? = null
-    ): String = withContext(Dispatchers.IO) {
-        if (eventUids.isEmpty()) return@withContext "No events selected"
-        val ctx = context ?: appContext
+    suspend fun uploadSelectedEvents(context: Context, eventUids: List<String>, projectUid: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        // 首先执行事件目录迁移，确保所有事件都有对应的目录结构
+        val migrationUtil = EventDirectoryMigrationUtil(eventDao, gson)
+        val migrationResult = migrationUtil.migrateEventDirectories(context)
+        
+        android.util.Log.d("ProjectDetailViewModel", "Migration completed: ${migrationResult.successCount} created, ${migrationResult.skippedCount} skipped, ${migrationResult.failureCount} failed")
+        
+        if (!migrationResult.isSuccessful) {
+            android.util.Log.w("ProjectDetailViewModel", "Migration had failures: ${migrationResult.errors}")
+        }
         val results = mutableListOf<String>()
-        for (uid in eventUids) {
-            // 先创建压缩包并获取哈希值
-            val zipResult = eventRepository.createEventZip(ctx, uid)
-            if (!zipResult.first) {
-                results += "event=$uid | FAIL | Create zip failed: ${zipResult.second}"
-                continue
+        
+        android.util.Log.d("ProjectDetailViewModel", "Starting batch event upload")
+        android.util.Log.d("ProjectDetailViewModel", "Event UIDs: $eventUids")
+        android.util.Log.d("ProjectDetailViewModel", "Project UID: $projectUid")
+        
+        if (eventUids.isEmpty()) {
+            android.util.Log.w("ProjectDetailViewModel", "No events selected for sync")
+            return@withContext false to "No events selected for sync"
+        }
+        
+        try {
+            // Step 1: 为所有事件创建压缩包并收集hash信息
+            val eventPackages = mutableListOf<EventUploadItem>()
+            android.util.Log.d("ProjectDetailViewModel", "Step 1: Creating zip packages for ${eventUids.size} events")
+            
+            for (uid in eventUids) {
+                android.util.Log.d("ProjectDetailViewModel", "Processing event UID: $uid")
+                
+                // 检查事件目录是否存在
+                val eventDir = File(context.filesDir, "events/$uid")
+                android.util.Log.d("ProjectDetailViewModel", "Checking event directory: ${eventDir.absolutePath}")
+                android.util.Log.d("ProjectDetailViewModel", "Directory exists: ${eventDir.exists()}")
+                
+                if (eventDir.exists()) {
+                    val files = eventDir.listFiles()
+                    android.util.Log.d("ProjectDetailViewModel", "Directory contains ${files?.size ?: 0} files:")
+                    files?.forEach { file ->
+                        android.util.Log.d("ProjectDetailViewModel", "  - ${file.name} (${if (file.isDirectory) "DIR" else "FILE"}, ${file.length()} bytes)")
+                    }
+                } else {
+                    android.util.Log.e("ProjectDetailViewModel", "Event directory does not exist: ${eventDir.absolutePath}")
+                    results += "event=$uid | FAIL | Directory not found: ${eventDir.absolutePath}"
+                    continue
+                }
+                
+                val zipResult = eventRepository.createEventZip(context, uid)
+                if (!zipResult.first) {
+                    android.util.Log.e("ProjectDetailViewModel", "Failed to create zip for event $uid: ${zipResult.second}")
+                    results += "event=$uid | FAIL | Create zip failed: ${zipResult.second}"
+                    continue
+                }
+                
+                val packageHash = zipResult.second
+                android.util.Log.d("ProjectDetailViewModel", "Created zip for event $uid with hash: $packageHash")
+                eventPackages.add(
+                    EventUploadItem(
+                        eventUid = uid,
+                        eventPackageHash = packageHash,
+                        eventPackageName = "${uid}.zip"
+                    )
+                )
+                results += "event=$uid | SUCCESS | Zip created with hash: $packageHash"
             }
             
-            val packageHash = zipResult.second
-            // 这里需要调用完整的同步流程，但为了保持兼容性，我们暂时只创建压缩包
-            // TODO: 如果需要完整的云同步，应该调用 EventFormViewModel.uploadEventWithSync
-            results += "event=$uid | SUCCESS | Zip created with hash: $packageHash"
+            if (eventPackages.isEmpty()) {
+                android.util.Log.e("ProjectDetailViewModel", "No valid event packages created")
+                return@withContext false to "No valid event packages created"
+            }
+            
+            android.util.Log.d("ProjectDetailViewModel", "Step 2: Calling create_event_upload API with ${eventPackages.size} packages")
+            
+            // 详细打印每个事件包的信息
+            android.util.Log.d("ProjectDetailViewModel", "Event packages details:")
+            eventPackages.forEachIndexed { index, pkg ->
+                android.util.Log.d("ProjectDetailViewModel", "Package $index: eventUid=${pkg.eventUid}, hash=${pkg.eventPackageHash}, name=${pkg.eventPackageName}")
+            }
+            
+            // Step 2: 调用 create_event_upload 接口
+            val taskUid = "batch_task_${System.currentTimeMillis()}"
+            android.util.Log.d("ProjectDetailViewModel", "Generated task UID: $taskUid")
+            android.util.Log.d("ProjectDetailViewModel", "About to call createEventUpload with ${eventPackages.size} packages")
+            
+            val createResult = eventRepository.createEventUpload(taskUid, projectUid, eventPackages)
+            
+            android.util.Log.d("ProjectDetailViewModel", "Create event upload API result: success=${createResult.first}")
+            
+            if (!createResult.first || createResult.second == null) {
+                android.util.Log.e("ProjectDetailViewModel", "Create event upload failed")
+                return@withContext false to "Create event upload failed"
+            }
+            
+            val uploadResponse = createResult.second!!
+            android.util.Log.d("ProjectDetailViewModel", "Upload response: success=${uploadResponse.success}, message=${uploadResponse.message}")
+            android.util.Log.d("ProjectDetailViewModel", "Upload response data count: ${uploadResponse.data?.size ?: 0}")
+            
+            if (!uploadResponse.success || uploadResponse.data.isNullOrEmpty()) {
+                android.util.Log.e("ProjectDetailViewModel", "Create event upload response invalid: ${uploadResponse.message}")
+                return@withContext false to "Create event upload response invalid: ${uploadResponse.message}"
+            }
+            
+            results += "API | SUCCESS | Got ${uploadResponse.data.size} upload tickets"
+            
+            android.util.Log.d("ProjectDetailViewModel", "Step 3: Uploading ${uploadResponse.data.size} packages to OSS")
+            
+            // Step 4: 根据返回的data列表，匹配hash并上传对应的压缩包
+            var uploadSuccessCount = 0
+            
+            android.util.Log.d("ProjectDetailViewModel", "Hash matching verification:")
+            android.util.Log.d("ProjectDetailViewModel", "Local packages count: ${eventPackages.size}")
+            for (pkg in eventPackages) {
+                android.util.Log.d("ProjectDetailViewModel", "Local package - Event: ${pkg.eventUid}, Hash: ${pkg.eventPackageHash}")
+            }
+            
+            android.util.Log.d("ProjectDetailViewModel", "Response items count: ${uploadResponse.data.size}")
+            for (item in uploadResponse.data) {
+                android.util.Log.d("ProjectDetailViewModel", "Response item - Event: ${item.eventUid}, Hash: ${item.eventPackageHash}")
+            }
+            
+            for (responseItem in uploadResponse.data) {
+                android.util.Log.d("ProjectDetailViewModel", "Processing response item with hash: ${responseItem.eventPackageHash}")
+                
+                val matchingPackage = eventPackages.find { it.eventPackageHash == responseItem.eventPackageHash }
+                if (matchingPackage != null) {
+                    android.util.Log.d("ProjectDetailViewModel", "Found matching package for event: ${matchingPackage.eventUid}")
+                    android.util.Log.d("ProjectDetailViewModel", "Hash match confirmed: ${matchingPackage.eventPackageHash} == ${responseItem.eventPackageHash}")
+                    
+                    // 将票据数据转换为Map格式
+                    val ticketData = mapOf(
+                        "host" to responseItem.ticket.host,
+                        "dir" to responseItem.ticket.dir,
+                        "file_id" to responseItem.ticket.fileId,
+                        "policy" to responseItem.ticket.policy,
+                        "signature" to responseItem.ticket.signature,
+                        "accessid" to responseItem.ticket.accessId
+                    )
+                    
+                    android.util.Log.d("ProjectDetailViewModel", "Uploading to OSS with ticket data: $ticketData")
+                    
+                    // 使用票据信息上传压缩包
+                    val uploadResult = eventRepository.uploadEventZipWithTicket(
+                        context, 
+                        matchingPackage.eventUid, 
+                        matchingPackage.eventPackageHash, 
+                        ticketData
+                    )
+                    
+                    android.util.Log.d("ProjectDetailViewModel", "OSS upload result for ${matchingPackage.eventUid}: success=${uploadResult.first}")
+                    
+                    if (uploadResult.first) {
+                        uploadSuccessCount++
+                        results += "event=${matchingPackage.eventUid} | SUCCESS | Uploaded to OSS"
+                    } else {
+                        android.util.Log.e("ProjectDetailViewModel", "OSS upload failed for ${matchingPackage.eventUid}: ${uploadResult.second}")
+                        results += "event=${matchingPackage.eventUid} | FAIL | Upload to OSS failed: ${uploadResult.second}"
+                    }
+                } else {
+                    android.util.Log.w("ProjectDetailViewModel", "No matching package found for hash: ${responseItem.eventPackageHash}")
+                    android.util.Log.w("ProjectDetailViewModel", "Available local hashes: ${eventPackages.map { it.eventPackageHash }}")
+                    results += "WARN | No matching package found for hash: ${responseItem.eventPackageHash}"
+                }
+            }
+            
+            android.util.Log.d("ProjectDetailViewModel", "Upload completed: $uploadSuccessCount/${uploadResponse.data.size} successful")
+            
+            // Step 5: 轮询查询上传状态
+            if (uploadSuccessCount > 0) {
+                android.util.Log.d("ProjectDetailViewModel", "Starting status polling...")
+                results += "POLLING | Starting status check..."
+                var pollCount = 0
+                val maxPollCount = 15 // 最多轮询15次（批量同步时间可能较长）
+                val pollInterval = 3000L // 每3秒轮询一次
+                
+                while (pollCount < maxPollCount) {
+                    kotlinx.coroutines.delay(pollInterval)
+                    val statusResult = eventRepository.noticeEventUploadSuccess(taskUid)
+                    
+                    if (statusResult.first) { // 请求成功
+                        if (statusResult.second) { // 任务完成
+                            results += "POLLING | SUCCESS | All events synced to cloud"
+                            return@withContext true to results.joinToString(separator = "\n")
+                        } else {
+                            results += "POLLING | PROGRESS | Poll attempt ${pollCount + 1}/$maxPollCount"
+                        }
+                    } else {
+                        results += "POLLING | WARN | Poll request failed, continuing..."
+                    }
+                    
+                    pollCount++
+                }
+                
+                if (pollCount >= maxPollCount) {
+                    results += "POLLING | TIMEOUT | Please check sync status later"
+                    return@withContext false to results.joinToString(separator = "\n")
+                }
+            }
+            
+        } catch (e: Exception) {
+            results += "ERROR | Batch sync failed: ${e.message}"
+            return@withContext false to results.joinToString(separator = "\n")
         }
-        results.joinToString(separator = "\n")
+        
+        return@withContext true to results.joinToString(separator = "\n")
     }
 
     // ---------------- 新增：项目详情分组展示所需的数据模型与状态流 ----------------
@@ -573,6 +758,136 @@ class ProjectDetailViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e("ProjectDetailViewModel", "Failed to update defect order", e)
             }
+        }
+    }
+
+    /**
+     * 函数：uploadSingleEvent
+     * 说明：单个事件同步上传功能
+     * 参考EventFormViewModel的uploadEventWithSync方法实现
+     * 1. 检查事件是否存在于本地
+     * 2. 创建事件压缩包并获取 SHA-256 哈希值
+     * 3. 调用 create_event_upload 接口获取票据信息
+     * 4. 根据返回的票据信息上传对应的压缩包
+     * 5. 轮询 notice_event_upload_success 获取同步状态
+     * 
+     * @param eventUid 事件UID
+     * @param projectUid 项目UID
+     * @return Pair<Boolean, String> 成功标志和消息
+     */
+    suspend fun uploadSingleEvent(eventUid: String, projectUid: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        try {
+            Log.d("ProjectDetailViewModel", "Starting single event upload for eventUid: $eventUid, projectUid: $projectUid")
+            
+            // Step 1: 检查事件目录是否存在
+            val eventDir = File(appContext.filesDir, "events/$eventUid")
+            if (!eventDir.exists()) {
+                Log.e("ProjectDetailViewModel", "Event directory not found: ${eventDir.absolutePath}")
+                return@withContext false to "Event not found locally"
+            }
+            
+            Log.d("ProjectDetailViewModel", "Event directory exists: ${eventDir.absolutePath}")
+
+            // Step 2: 创建事件压缩包并获取 SHA-256 哈希值
+            Log.d("ProjectDetailViewModel", "Creating event zip package...")
+            val zipResult = eventRepository.createEventZip(appContext, eventUid)
+            if (!zipResult.first) {
+                Log.e("ProjectDetailViewModel", "Create zip failed: ${zipResult.second}")
+                return@withContext false to "Create zip failed: ${zipResult.second}"
+            }
+            
+            val packageHash = zipResult.second // 获取 SHA-256 哈希值
+            Log.d("ProjectDetailViewModel", "Event zip created successfully, SHA-256: $packageHash")
+            
+            // Step 3: 调用 create_event_upload 接口获取票据信息
+            val taskUid = "single_task_${System.currentTimeMillis()}" // 生成任务UID
+            
+            val uploadList = listOf(
+                EventUploadItem(
+                    eventUid = eventUid,
+                    eventPackageHash = packageHash, // 使用 SHA-256 哈希值
+                    eventPackageName = "${eventUid}.zip"
+                )
+            )
+            
+            Log.d("ProjectDetailViewModel", "Calling create_event_upload API...")
+            val createResult = eventRepository.createEventUpload(taskUid, projectUid, uploadList)
+            if (!createResult.first || createResult.second == null) {
+                Log.e("ProjectDetailViewModel", "Create event upload failed")
+                return@withContext false to "Create event upload failed"
+            }
+            
+            val uploadResponse = createResult.second!!
+            if (!uploadResponse.success || uploadResponse.data.isNullOrEmpty()) {
+                Log.e("ProjectDetailViewModel", "Create event upload response invalid: ${uploadResponse.message}")
+                return@withContext false to "Create event upload response invalid: ${uploadResponse.message}"
+            }
+            
+            Log.d("ProjectDetailViewModel", "Create event upload API called successfully, got ${uploadResponse.data.size} items")
+            
+            // Step 4: 遍历返回的data列表，根据event_package_hash匹配并上传对应的压缩包
+            for (responseItem in uploadResponse.data) {
+                if (responseItem.eventPackageHash == packageHash) {
+                    Log.d("ProjectDetailViewModel", "Found matching item for hash: $packageHash, uploading...")
+                    
+                    // 将票据数据转换为Map格式
+                    val ticketData = mapOf(
+                        "host" to responseItem.ticket.host,
+                        "dir" to responseItem.ticket.dir,
+                        "file_id" to responseItem.ticket.fileId,
+                        "policy" to responseItem.ticket.policy,
+                        "signature" to responseItem.ticket.signature,
+                        "accessid" to responseItem.ticket.accessId
+                    )
+                    
+                    // 使用票据信息上传压缩包
+                    val uploadResult = eventRepository.uploadEventZipWithTicket(
+                        appContext, 
+                        eventUid, 
+                        packageHash, 
+                        ticketData
+                    )
+                    
+                    if (!uploadResult.first) {
+                        Log.e("ProjectDetailViewModel", "Upload zip failed: ${uploadResult.second}")
+                        return@withContext false to "Upload zip failed: ${uploadResult.second}"
+                    }
+                    
+                    Log.d("ProjectDetailViewModel", "Zip uploaded successfully for event: $eventUid")
+                    break
+                }
+            }
+            
+            // Step 5: 轮询查询上传状态
+            Log.d("ProjectDetailViewModel", "Starting polling for upload status...")
+            var pollCount = 0
+            val maxPollCount = 30 // 最多轮询30次
+            val pollInterval = 2000L // 每2秒轮询一次
+            
+            while (pollCount < maxPollCount) {
+                kotlinx.coroutines.delay(pollInterval)
+                val statusResult = eventRepository.noticeEventUploadSuccess(taskUid)
+                
+                Log.d("ProjectDetailViewModel", "Poll attempt ${pollCount + 1}/$maxPollCount, result: ${statusResult.first}, completed: ${statusResult.second}")
+                
+                if (statusResult.first) { // 请求成功
+                    if (statusResult.second) { // 任务完成
+                        Log.d("ProjectDetailViewModel", "Event sync completed successfully")
+                        return@withContext true to "Event synced to cloud successfully"
+                    }
+                } else {
+                    Log.w("ProjectDetailViewModel", "Poll request failed, continuing...")
+                }
+                
+                pollCount++
+            }
+            
+            // 轮询超时，返回失败
+            Log.w("ProjectDetailViewModel", "Polling timeout after $maxPollCount attempts")
+            false to "Sync timeout - please check sync status later"
+        } catch (e: Exception) {
+            Log.e("ProjectDetailViewModel", "uploadSingleEvent failed: ${e.message}", e)
+            false to "Sync failed: ${e.message}"
         }
     }
 

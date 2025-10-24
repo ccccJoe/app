@@ -68,33 +68,31 @@ class CleanupProjectsUseCase @Inject constructor(
                 }
             }
 
-            // Step 1: Clean up local files first
-            val fileCleanupResults = mutableListOf<String>()
+            // Clean up files for each project
+            val cleanedFilesList = mutableListOf<String>()
             for (projectInfo in projectsToClean) {
-                val fileResult = cleanupProjectFiles(projectInfo)
-                if (fileResult.isNotEmpty()) {
-                    fileCleanupResults.add(fileResult)
+                val cleanedFiles = cleanupProjectFiles(projectInfo)
+                if (cleanedFiles.isNotEmpty()) {
+                    cleanedFilesList.add(cleanedFiles)
                 }
             }
 
-            // Step 2: Delete database records
-            val dbResult = projectRepository.deleteProjectsAndRelatedData(projectIds)
-            
-            if (dbResult.isSuccess) {
-                val totalFiles = fileCleanupResults.sumOf { it.split(",").size }
-                CleanupResult(
-                    isSuccess = true,
-                    message = "Successfully cleaned up ${projectIds.size} projects" +
-                            if (totalFiles > 0) " and $totalFiles associated files" else "",
-                    cleanedProjectCount = projectIds.size,
-                    cleanedFileCount = totalFiles
-                )
-            } else {
-                CleanupResult(
-                    isSuccess = false,
-                    errorMessage = dbResult.errorMessage ?: "Database cleanup failed"
-                )
+            // Delete associated defects and events from database
+            for (projectInfo in projectsToClean) {
+                // Delete defects associated with this project
+                defectRepository.deleteByProjectId(projectInfo.projectId)
+                // Delete events associated with this project  
+                eventRepository.deleteByProjectId(projectInfo.projectId)
             }
+
+            // Mark projects as deleted instead of physically deleting them
+            projectRepository.markProjectsAsDeleted(projectIds)
+
+            return@withContext CleanupResult(
+                isSuccess = true,
+                cleanedProjectCount = projectsToClean.size,
+                cleanedFileCount = cleanedFilesList.size
+            )
 
         } catch (e: Exception) {
             CleanupResult(

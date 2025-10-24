@@ -109,13 +109,17 @@ interface ProjectDao {
         }
     }
 
-    /** 获取所有已完成状态的项目 */
-    @Query("SELECT * FROM project WHERE UPPER(status) = 'FINISHED' OR status = '已完成' ORDER BY name ASC")
+    /** 获取所有已完成状态的项目（排除已删除的项目） */
+    @Query("SELECT * FROM project WHERE (UPPER(status) = 'FINISHED' OR status = '已完成') AND (is_deleted = 0 OR is_deleted IS NULL) ORDER BY name ASC")
     fun getFinishedProjects(): Flow<List<ProjectEntity>>
 
     /** 批量删除项目（根据项目ID列表） */
     @Query("DELETE FROM project WHERE project_id IN (:projectIds)")
     suspend fun deleteByIds(projectIds: List<Long>)
+    
+    /** Mark projects as deleted by IDs (batch soft deletion). */
+    @Query("UPDATE project SET is_deleted = 1 WHERE project_id IN (:projectIds)")
+    suspend fun markAsDeleted(projectIds: List<Long>)
 }
 
 /**

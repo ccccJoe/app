@@ -1,4 +1,4 @@
-package com.simsapp.ui.theme
+package com.example.sims_android.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

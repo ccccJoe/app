@@ -1,13 +1,17 @@
 /*
  * File: NetworkModule.kt
- * Description: Hilt module providing Retrofit/OkHttp for network layer with timeouts, logging and common headers.
+ * Description: Provides network-related dependencies including Retrofit and OkHttp configuration
  * Author: SIMS Team
  */
 package com.simsapp.di
 
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
+import com.simsapp.BuildConfig
+import com.simsapp.data.local.AuthManager
 import com.simsapp.data.remote.ApiService
+import com.simsapp.data.remote.AuthApiService
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -33,38 +37,67 @@ object NetworkModule {
     @Singleton
     fun provideGson(): Gson = GsonBuilder().create()
 
-    /**
-     * Provide a common header interceptor.
-     * - Adds Accept and User-Agent headers for all requests.
-     * - Injects default X-USERNAME header when not explicitly provided by the request (defaults to "test").
-     * - Injects a default Authorization header when not provided (priority: BuildConfig.DEV_AUTH_TOKEN > fixed debug token).
-     */
     @Provides
     @Singleton
-    fun provideHeaderInterceptor(): Interceptor = Interceptor { chain ->
-        val original = chain.request()
-        val builder = original.newBuilder()
-            .header("Accept", "application/json")
-            .header("User-Agent", "SIMS-Android/${com.simsapp.BuildConfig.VERSION_NAME}")
-
-        // 1) Default X-USERNAME header (if absent). Keep existing header if already present.
-        val defaultUsername = "test"
-        if (original.header("X-USERNAME") == null) {
-            builder.header("X-USERNAME", defaultUsername)
+    fun provideHeaderInterceptor(authManager: AuthManager): Interceptor {
+        return Interceptor { chain ->
+            val original = chain.request()
+            val authData = authManager.getUserAuthData()
+            
+            val requestBuilder = original.newBuilder()
+            
+            // 基础认证头
+            if (authData != null) {
+                // 已绑定设备，使用完整的安全认证机制
+                try {
+                    // 1. 生成nonce（时间戳（毫秒）+ 五位随机数）
+                    val nonce = com.simsapp.utils.CryptoUtils.generateNonce()
+                    
+                    // 2. 获取私钥
+                    val privateKey = authManager.getPrivateKey()
+                    
+                    if (privateKey != null) {
+                        // 3. 生成签名：用工号对nonce做盐 -> SHA256 -> RSA签名
+                        val signature = com.simsapp.utils.CryptoUtils.generateRequestSignature(
+                            nonce, 
+                            authData.userCode,
+                            privateKey
+                        )
+                        
+                        // 4. 添加安全认证请求头
+                        requestBuilder
+                            .header("X-CLIENT-TYPE", "mobile")
+                            .header("X-USERNAME", authData.userCode)
+                            .header("X-NORCE", nonce)
+                            .header("X-SIGN", signature)
+                            .header("Authorization", "Bearer ${authData.token}")
+                    } else {
+                        // 私钥不存在，使用基础认证
+                        Log.w("NetworkModule", "Private key not found, using basic auth")
+                        requestBuilder
+                            .header("X-USERNAME", authData.userCode)
+                            .header("Authorization", "Bearer ${authData.token}")
+                    }
+                } catch (e: Exception) {
+                    // 签名生成失败，使用基础认证
+                    Log.e("NetworkModule", "Failed to generate signature, using basic auth", e)
+                    requestBuilder
+                        .header("X-USERNAME", authData.userCode)
+                        .header("Authorization", "Bearer ${authData.token}")
+                }
+            } else {
+                // 未绑定设备，使用调试模式
+                if (BuildConfig.DEBUG) {
+                    requestBuilder
+                        .header("X-USERNAME", "debug_user")
+                        .header("Authorization", "Bearer debug_token")
+                } else {
+                    Log.w("NetworkModule", "No auth data available in production mode")
+                }
+            }
+            
+            chain.proceed(requestBuilder.build())
         }
-
-        // 2) Default Authorization header. If the request already sets Authorization, keep it.
-        val defaultAuth: String? = when {
-            com.simsapp.BuildConfig.DEV_AUTH_TOKEN.isNotBlank() -> "Bearer ${com.simsapp.BuildConfig.DEV_AUTH_TOKEN}"
-            com.simsapp.BuildConfig.DEBUG -> "Bearer eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzYwNTk2Mjg5LCJleHAiOjE3NjA2ODI2ODl9.8d0gCaBn50wl4ekb6qoyTYn6-AW40Z4h0grSxT0mfZ1Vcga-yNtLdNHtwpkHHG5-7uBDVPWlmGst-sDDFZHSKA"
-            else -> null
-        }
-        if (original.header("Authorization") == null && !defaultAuth.isNullOrBlank()) {
-            builder.header("Authorization", defaultAuth)
-        }
-
-        val newReq = builder.build()
-        chain.proceed(newReq)
     }
 
     /** Provide OkHttp client with timeouts and logging for debug builds. */
@@ -87,7 +120,7 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideRetrofit(gson: Gson, client: OkHttpClient): Retrofit = Retrofit.Builder()
-        .baseUrl("https://your-api.example.com/")
+        .baseUrl("https://sims.ink-stone.win/zuul/sims-master/")
         .addConverterFactory(GsonConverterFactory.create(gson))
         .client(client)
         .build()
@@ -96,4 +129,8 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideApiService(retrofit: Retrofit): ApiService = retrofit.create(ApiService::class.java)
+
+    @Provides
+    @Singleton
+    fun provideAuthApiService(retrofit: Retrofit): AuthApiService = retrofit.create(AuthApiService::class.java)
 }

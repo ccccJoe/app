@@ -275,7 +275,7 @@ class RiskMatrixRepository @Inject constructor(
             
             // 首先解析下载URL
             val urlResponse = apiService.resolveDownloadUrl(
-                endpoint = "https://sims.ink-stone.win/zuul/sims-ym/storage/download/url",
+                endpoint = "storage/download/url",
                 fileIds = listOf(fileId)
             )
             

@@ -1,4 +1,4 @@
-package com.simsapp.ui.common
+package com.example.sims_android.ui.common
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background

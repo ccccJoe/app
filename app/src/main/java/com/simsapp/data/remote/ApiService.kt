@@ -41,7 +41,7 @@ interface ApiService {
     // -------------------- Dynamic Endpoints --------------------
     /**
      * 获取上传凭证（临时票据）。
-     * 等价于：GET https://sims.ink-stone.win/zuul/sims-ym/storage/upload/ticket
+     * 等价于：GET /storage/upload/ticket
      * 需要在 Header 中传递 X-USERNAME 与 Authorization（可选，Bearer token）。
      *
      * 说明：默认由全局 OkHttp 拦截器统一注入这两个头；仅当需要覆盖默认值时再通过参数显式传入。
@@ -64,7 +64,7 @@ interface ApiService {
 
     /**
      * 动态获取项目列表（绝对地址）。
-     * 示例：GET https://sims.ink-stone.win/zuul/sims-ym/app/project/project_list
+     * 示例：GET https://sims.ink-stone.win/zuul/sims-fdc/app/project/project_list
      * 可选头：X-USERNAME、Authorization（由拦截器统一注入；如需覆盖可显式传入）。
      * @param endpoint 绝对地址（包含 https 前缀）
      * @param username 可空：覆盖默认的 X-USERNAME
@@ -80,7 +80,7 @@ interface ApiService {
 
     /**
      * 动态获取项目详情（绝对地址）。
-     * 示例：GET https://sims.ink-stone.win/zuul/sims-ym/app/project/project?project_uid=xxx
+     * 示例：GET /app/project/project?project_uid=xxx
      * @param endpoint 完整绝对地址（不含查询参数）
      * @param projectUid 查询参数 project_uid
      * @param username 可空：覆盖默认的 X-USERNAME
@@ -116,7 +116,7 @@ interface ApiService {
      * Resolve a temporary download url for risk matrix config by posting file id list.
      * Using @Url to allow full absolute endpoint independent of baseUrl.
      *
-     * @param endpoint Full absolute url like "https://sims.ink-stone.win/zuul/sims-ym/storage/download/url"
+     * @param endpoint Full absolute url like "/storage/download/url"
      * @param fileIds  The request body as a JSON array of file id strings (from screenshot parameter)
      */
     @POST
@@ -134,7 +134,7 @@ interface ApiService {
     // -------------------- Event Sync Endpoints --------------------
     /**
      * 创建事件上传任务，支持多个事件同步
-     * POST https://sims.ink-stone.win/zuul/sims-ym/app/event/create_event_upload
+     * POST /app/event/create_event_upload
      * 
      * @param endpoint 完整的接口地址
      * @param requestBody 请求体，包含 task_uid, target_project_uid, upload_list 等字段
@@ -147,7 +147,7 @@ interface ApiService {
 
     /**
      * 轮询查询事件上传成功状态
-     * GET https://sims.ink-stone.win/zuul/sims-ym/app/event/notice_event_upload_success
+     * GET /app/event/notice_event_upload_success
      * 
      * @param endpoint 完整的接口地址
      * @param taskUid 任务UID，用于查询对应任务的状态
