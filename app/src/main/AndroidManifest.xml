@@ -64,6 +64,12 @@
             android:exported="false"
             android:theme="@style/Theme.SIMSAndroid" />
         
+        <!-- Structural Defect Details Activity -->
+        <activity
+            android:name="com.example.sims_android.ui.event.StructuralDefectActivity"
+            android:exported="true"
+            android:theme="@style/Theme.SIMSAndroid" />
+        
 
     </application>
 

@@ -120,7 +120,7 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideRetrofit(gson: Gson, client: OkHttpClient): Retrofit = Retrofit.Builder()
-        .baseUrl("https://sims.ink-stone.win/zuul/sims-master/")
+        .baseUrl("https://sims.ink-stone.win/zuul/sims-ym/")
         .addConverterFactory(GsonConverterFactory.create(gson))
         .client(client)
         .build()

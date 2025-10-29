@@ -342,6 +342,41 @@ object DatabaseModule {
         }
     }
 
+    /** Migration: v15 -> v16, add resource_id column to project_digital_asset table. */
+    private val MIGRATION_15_16 = object : Migration(15, 16) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Add resource_id column to project_digital_asset table
+            database.execSQL("ALTER TABLE project_digital_asset ADD COLUMN resource_id TEXT")
+        }
+    }
+
+    /** Migration: v16 -> v17, add structural_defect_details field to event table. */
+    private val MIGRATION_16_17 = object : Migration(16, 17) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 为 event 表添加 structural_defect_details 字段，用于存储 SDD 表单数据
+            database.execSQL("ALTER TABLE event ADD COLUMN structural_defect_details TEXT")
+        }
+    }
+
+    /** Migration: v17 -> v18, reserved for future use. */
+    private val MIGRATION_17_18 = object : Migration(17, 18) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 预留迁移，暂无操作
+        }
+    }
+
+    /** Migration: v18 -> v19, add defect.uid and event.defect_uids */
+    private val MIGRATION_18_19 = object : Migration(18, 19) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 为 defect 表添加 uid 字段（非唯一索引，用于按UID查询）
+            database.execSQL("ALTER TABLE defect ADD COLUMN uid TEXT NOT NULL DEFAULT ''")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_defect_uid ON defect (uid)")
+
+            // 为 event 表添加 defect_uids 字段（List<String> 的 JSON 存储）
+            database.execSQL("ALTER TABLE event ADD COLUMN defect_uids TEXT NOT NULL DEFAULT '[]'")
+        }
+    }
+
     /**
      * Provide the Room database instance.
      *
@@ -352,7 +387,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "sims.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
             // 临时启用破坏性迁移来解决KSP编译问题
             .fallbackToDestructiveMigration()
             .build()

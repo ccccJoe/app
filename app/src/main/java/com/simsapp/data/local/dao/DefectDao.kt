@@ -56,6 +56,14 @@ interface DefectDao {
     @Query("SELECT * FROM defect WHERE defect_id = :id LIMIT 1")
     suspend fun getById(id: Long): DefectEntity?
 
+    /** Get defect by remote uid. */
+    @Query("SELECT * FROM defect WHERE uid = :uid LIMIT 1")
+    suspend fun getByUid(uid: String): DefectEntity?
+
+    /** Get defect by project_uid and remote uid. */
+    @Query("SELECT * FROM defect WHERE project_uid = :projectUid AND uid = :uid LIMIT 1")
+    suspend fun getByProjectUidAndUid(projectUid: String, uid: String): DefectEntity?
+
     /** Update event_count for a defect by defect_id. */
     @Query("UPDATE defect SET event_count = :eventCount WHERE defect_id = :defectId")
     suspend fun updateEventCount(defectId: Long, eventCount: Int)

@@ -877,6 +877,12 @@ class ProjectRepository @Inject constructor(
                 val no = item.optString("no").takeIf { it.isNotBlank() } ?: continue
                 val risk = item.optString("risk_rating").takeIf { it.isNotBlank() } ?: ""
                 val status = item.optString("status", "OPEN")
+                // Parse remote defect UID if available (supports keys: uid / defect_uid)
+                val defectUid = when {
+                    item.has("uid") -> item.optString("uid").orEmpty()
+                    item.has("defect_uid") -> item.optString("defect_uid").orEmpty()
+                    else -> ""
+                }
                 
                 // 从本地缓存目录读取图片缩略图路径
                 val dir = File(appContext.filesDir, "history_defects/${projectUid}/${sanitize(no)}")
@@ -894,14 +900,17 @@ class ProjectRepository @Inject constructor(
                 val defect = existingDefect?.copy(
                     riskRating = risk,
                     status = status,
-                    images = images
+                    images = images,
+                    // Backfill remote uid if provided and previously empty
+                    uid = if (defectUid.isNotBlank()) defectUid else existingDefect.uid
                 ) ?: com.simsapp.data.local.entity.DefectEntity(
                     projectId = projectId,
                     projectUid = projectUid,
                     defectNo = no,
                     riskRating = risk,
                     status = status,
-                    images = images
+                    images = images,
+                    uid = defectUid
                 )
                 
                 defects.add(defect)

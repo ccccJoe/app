@@ -67,6 +67,7 @@ class RiskMatrixRepositoryTest {
             name = "risk_matrix.json",
             type = "risk_matrix",
             fileId = "risk_matrix_file_123",
+            resourceId = "test_resource_123", // 添加resourceId参数
             localPath = null,
             downloadStatus = "PENDING",
             downloadUrl = null,
@@ -155,6 +156,7 @@ class RiskMatrixRepositoryTest {
             name = "document.pdf",
             type = "document",
             fileId = "normal_file_123",
+            resourceId = "normal_resource_123", // 添加resourceId参数
             localPath = null,
             downloadStatus = "PENDING",
             downloadUrl = null,
@@ -193,6 +195,7 @@ class RiskMatrixRepositoryTest {
             name = "risk_matrix.json",
             type = "risk_matrix",
             fileId = "risk_matrix_file_123",
+            resourceId = "cached_resource_123", // 添加resourceId参数
             localPath = "/cache/risk_matrix.json",
             downloadStatus = "COMPLETED",
             downloadUrl = "https://example.com/risk_matrix.json",

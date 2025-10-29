@@ -59,7 +59,7 @@ class EventFormViewModel @Inject constructor(
     val projectDao: ProjectDao,
     private val defectRepository: DefectRepository,
     private val riskMatrixRepository: RiskMatrixRepository,
-    private val projectDigitalAssetDao: com.simsapp.data.local.dao.ProjectDigitalAssetDao
+    val projectDigitalAssetDao: com.simsapp.data.local.dao.ProjectDigitalAssetDao
 ) : ViewModel() {
 
     /**
@@ -176,7 +176,8 @@ class EventFormViewModel @Inject constructor(
         selectedDefects: List<DefectEntity>,
         digitalAssetFileIds: List<String> = emptyList(),
         isEditMode: Boolean = false,
-        currentEventId: Long? = null
+        currentEventId: Long? = null,
+        structuralDefectDetails: String? = null
     ): Result<Long> = withContext(Dispatchers.IO) {
         try {
             val pid = repo.resolveProjectIdByName(projectName)
@@ -187,8 +188,11 @@ class EventFormViewModel @Inject constructor(
             val project = projectDao.getById(pid)
             val projectUid = project?.projectUid ?: ""
             
-            // 序列化风险评估答案
-            val riskAnswersJson = riskResult?.answers?.let { answers ->
+            // 序列化风险评估数据（新的对象格式）
+            val riskAnswersJson = riskResult?.assessmentData?.let { assessmentData ->
+                gson.toJson(assessmentData)
+            } ?: riskResult?.answers?.let { answers ->
+                // 兼容旧格式：如果没有新格式数据，则使用旧格式
                 gson.toJson(answers)
             }
             
@@ -213,6 +217,8 @@ class EventFormViewModel @Inject constructor(
             // 提取缺陷ID和编号
             val defectIds = selectedDefects.map { it.defectId }
             val defectNos = selectedDefects.map { it.defectNo }
+            // 提取缺陷远程UID
+            val defectUids = selectedDefects.map { it.uid }.filter { it.isNotBlank() }
             
             // 获取之前关联的缺陷列表（用于比较变化）
             val previousDefectIds = if (isEditMode && currentEventId != null && currentEventId > 0) {
@@ -235,6 +241,7 @@ class EventFormViewModel @Inject constructor(
                     projectId = pid,
                     projectUid = projectUid,
                     defectIds = defectIds,
+                    defectUids = defectUids,
                     defectNos = defectNos,
                     location = location,
                     content = description,
@@ -245,7 +252,8 @@ class EventFormViewModel @Inject constructor(
                     riskAnswers = riskAnswersJson,
                     photoFiles = photoFilePaths,
                     audioFiles = audioFilePaths,
-                    isDraft = true
+                    isDraft = true,
+                    structuralDefectDetails = structuralDefectDetails
                 )
             } else {
                 // 新建模式：创建新事件，生成新的UUID
@@ -255,6 +263,7 @@ class EventFormViewModel @Inject constructor(
                     projectId = pid,
                     projectUid = projectUid,
                     defectIds = defectIds,
+                    defectUids = defectUids,
                     defectNos = defectNos,
                     location = location,
                     content = description,
@@ -265,7 +274,8 @@ class EventFormViewModel @Inject constructor(
                     riskAnswers = riskAnswersJson,
                     photoFiles = photoFilePaths,
                     audioFiles = audioFilePaths,
-                    isDraft = true
+                    isDraft = true,
+                    structuralDefectDetails = structuralDefectDetails
                 )
             }
             
@@ -279,6 +289,37 @@ class EventFormViewModel @Inject constructor(
                 eventDir.mkdirs()
                 
                 // 创建meta.json文件
+                val riskData = mutableMapOf<String, Any>()
+                riskData["level"] = riskResult?.level ?: ""
+                riskData["score"] = riskResult?.score ?: 0.0
+                
+                // 将risk_answers数据直接作为answers字段，不进行解析转换
+                if (!riskAnswersJson.isNullOrEmpty()) {
+                    try {
+                        // 直接将原始的risk_answers JSON字符串作为answers字段的值
+                        val gson = com.google.gson.Gson()
+                        val rawAnswersData = gson.fromJson(riskAnswersJson, Any::class.java)
+                        riskData["answers"] = rawAnswersData
+                    } catch (e: Exception) {
+                        Log.w("EventFormVM", "Failed to parse risk answers JSON: ${e.message}")
+                        riskData["answers"] = riskAnswersJson as Any
+                    }
+                } else {
+                    riskData["answers"] = ""
+                }
+                
+                // 将结构缺陷详情写入为对象：解析为 JsonObject，失败时写入空对象
+                val structuralJsonObj = try {
+                    if (!structuralDefectDetails.isNullOrBlank()) {
+                        com.google.gson.JsonParser.parseString(structuralDefectDetails).asJsonObject
+                    } else {
+                        com.google.gson.JsonObject()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("EventFormVM", "Failed to parse structuralDefectDetails to object: ${e.message}")
+                    com.google.gson.JsonObject()
+                }
+
                 val metaData = mapOf(
                     "eventId" to id,
                     "uid" to eventUid,
@@ -287,13 +328,19 @@ class EventFormViewModel @Inject constructor(
                     "location" to (location ?: ""),
                     "content" to description,
                     "lastEditTime" to now,
-                    "riskLevel" to (riskResult?.level ?: ""),
-                    "riskScore" to (riskResult?.score ?: 0.0),
-                    "photoFiles" to photoFilePaths,
-                    "audioFiles" to audioFilePaths,
+                    "risk" to riskData,
+                    "photoFiles" to photoFiles.mapIndexed { index, _ -> "photo_$index.jpg" },
+                    "audioFiles" to audioFiles.mapIndexed { index, _ -> "audio_$index.m4a" },
+                    // 新增：写入数字资产对象数组（来自本地事件表的 assets 字段）
+                    // 结构：[{"fileId": "...", "fileName": "..."}, ...]
+                    "assets" to digitalAssets,
+                    // 兼容旧版读取：同时写入 digitalAssets（仅 fileId 列表）
+                    "digitalAssets" to digitalAssets.map { it.fileId },
                     "defectIds" to defectIds,
+                    "defectUids" to defectUids,
                     "defectNos" to defectNos,
-                    "isDraft" to true
+                    "isDraft" to true,
+                    "structuralDefectDetails" to structuralJsonObj
                 )
                 
                 val metaFile = File(eventDir, "meta.json")
@@ -441,6 +488,39 @@ class EventFormViewModel @Inject constructor(
     }
 
     /**
+     * 函数：getDefectByUid
+     * 说明：根据缺陷远端UID获取缺陷实体
+     *
+     * @param uid 缺陷远端UID
+     * @return DefectEntity? 缺陷实体或null（如果不存在）
+     */
+    suspend fun getDefectByUid(uid: String): DefectEntity? = withContext(Dispatchers.IO) {
+        try {
+            defectRepository.getDefectByUid(uid)
+        } catch (e: Exception) {
+            Log.e("EventFormVM", "getDefectByUid failed: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
+     * 函数：getDefectByProjectUidAndUid
+     * 说明：根据项目UID和缺陷远端UID获取缺陷实体
+     *
+     * @param projectUid 项目UID
+     * @param uid 缺陷远端UID
+     * @return DefectEntity? 缺陷实体或null（如果不存在）
+     */
+    suspend fun getDefectByProjectUidAndUid(projectUid: String, uid: String): DefectEntity? = withContext(Dispatchers.IO) {
+        try {
+            defectRepository.getDefectByProjectUidAndUid(projectUid, uid)
+        } catch (e: Exception) {
+            Log.e("EventFormVM", "getDefectByProjectUidAndUid failed: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
      * 函数：saveEventToLocal
      * 说明：将事件数据保存到本地文件系统
      * 
@@ -460,7 +540,8 @@ class EventFormViewModel @Inject constructor(
         riskResult: RiskAssessmentResult?,
         photoFiles: List<File>,
         audioFiles: List<File>,
-        digitalAssetFileIds: List<String> = emptyList()
+        digitalAssetFileIds: List<String> = emptyList(),
+        structuralDefectDetails: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val uid = UUID.randomUUID().toString()
@@ -482,32 +563,69 @@ class EventFormViewModel @Inject constructor(
             // Copy audios
             val savedAudios = mutableListOf<String>()
             audioFiles.forEachIndexed { index, file ->
-                val targetFile = File(eventDir, "audio_$index.mp3")
+                val targetFile = File(eventDir, "audio_$index.m4a")
                 FileInputStream(file).use { input ->
                     FileOutputStream(targetFile).use { output ->
                         input.copyTo(output)
                     }
                 }
-                savedAudios.add("audio_$index.mp3")
+                savedAudios.add("audio_$index.m4a")
             }
 
             // Save creation timestamp
             val createdAtPersisted = System.currentTimeMillis()
 
-            // Build meta content
-            val meta = EventMeta(
-                uid = uid,
-                projectName = projectName,
-                location = location,
-                description = description,
-                risk = riskResult?.let { RiskMeta(priority = it.level, score = it.score, answers = it.answers?.map { answer -> answer.optionText } ?: emptyList()) },
-                photos = savedPhotos.toList(),
-                audios = savedAudios.toList(),
-                digitalAssets = digitalAssetFileIds,
-                createdAt = createdAtPersisted
-            )
+            // Build meta content with original risk_answers data
+            val riskData = mutableMapOf<String, Any>()
+            riskData["level"] = riskResult?.level ?: ""
+            riskData["score"] = riskResult?.score ?: 0.0
+            
+            // 获取原始的risk_answers数据
+            val savedEvent = eventRepo.getEventByUid(uid)
+            val originalRiskAnswers = savedEvent?.riskAnswers
+            
+            if (!originalRiskAnswers.isNullOrEmpty()) {
+                try {
+                    // 直接将原始的risk_answers JSON字符串作为answers字段的值
+                    val rawAnswersData = gson.fromJson(originalRiskAnswers, Any::class.java)
+                    riskData["answers"] = rawAnswersData
+                } catch (e: Exception) {
+                    Log.w("EventFormVM", "Failed to parse risk answers JSON: ${e.message}")
+                    riskData["answers"] = originalRiskAnswers as Any
+                }
+            } else {
+                riskData["answers"] = ""
+            }
+            
+            val metaData = mapOf(
+                 "eventId" to (savedEvent?.eventId ?: 0),
+                 "uid" to uid,
+                 "projectId" to (savedEvent?.projectId ?: 0),
+                 "projectUid" to (savedEvent?.projectUid ?: ""),
+                 "location" to location,
+                 "content" to description,
+                 "lastEditTime" to createdAtPersisted,
+                 "risk" to riskData,
+                 "photoFiles" to savedPhotos.toList(),
+                 "audioFiles" to savedAudios.toList(),
+                 // 新增：写入数字资产对象数组（若数据库尚无事件记录，则根据传入的 fileId 解析文件名）
+                 "assets" to (try {
+                     digitalAssetFileIds.mapNotNull { fileId ->
+                         val fileName = getFileNameById(fileId)
+                         if (fileName != null) com.simsapp.data.local.entity.DigitalAssetItem(fileId = fileId, fileName = fileName) else null
+                     }
+                 } catch (_: Exception) { emptyList<com.simsapp.data.local.entity.DigitalAssetItem>() }),
+                 // 兼容旧版读取：同时写入 digitalAssets（仅 fileId 列表）
+                 "digitalAssets" to digitalAssetFileIds,
+                 "defectIds" to (savedEvent?.defectIds ?: emptyList<Long>()),
+                 "defectUids" to (savedEvent?.defectUids ?: emptyList<String>()),
+                 "defectNos" to (savedEvent?.defectNos ?: emptyList<String>()),
+                 "isDraft" to (savedEvent?.isDraft ?: false),
+                 "structuralDefectDetails" to structuralDefectDetails
+             )
+            
             val metaFile = File(eventDir, "meta.json")
-            metaFile.writeText(gson.toJson(meta))
+            metaFile.writeText(gson.toJson(metaData))
 
             Result.success(uid)
         } catch (e: Exception) {
@@ -754,7 +872,8 @@ class EventFormViewModel @Inject constructor(
         photoFiles: List<File>,
         audioFiles: List<File>,
         selectedDefects: List<DefectEntity>,
-        digitalAssetFileIds: List<String> = emptyList()
+        digitalAssetFileIds: List<String> = emptyList(),
+        structuralDefectDetails: String? = null
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
             // Step 1: 确保事件已保存到本地数据库和文件系统
@@ -773,7 +892,8 @@ class EventFormViewModel @Inject constructor(
                     selectedDefects = selectedDefects,
                     digitalAssetFileIds = digitalAssetFileIds,
                     isEditMode = false,
-                    currentEventId = null
+                    currentEventId = null,
+                    structuralDefectDetails = structuralDefectDetails
                 )
                 
                 if (saveResult.isFailure) {
@@ -796,7 +916,9 @@ class EventFormViewModel @Inject constructor(
                     riskResult = riskResult,
                     photoFiles = photoFiles,
                     audioFiles = audioFiles,
-                    digitalAssetFileIds = digitalAssetFileIds
+                    digitalAssetFileIds = digitalAssetFileIds,
+                    // 将事件的结构缺陷详情一并写入 meta.json（包含向导生成的summary）
+                    structuralDefectDetails = structuralDefectDetails ?: event?.structuralDefectDetails
                 )
                 
                 if (localSaveResult.isFailure) {

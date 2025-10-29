@@ -37,7 +37,7 @@ import com.simsapp.data.local.entity.ProjectEntity
         ProjectDetailEntity::class,
         ProjectDigitalAssetEntity::class
     ],
-    version = 15, // 增加版本号以支持EventEntity的uid字段
+    version = 19, // 升级到19以支持 defect.uid 与 event.defect_uids 字段迁移
     exportSchema = true
 )
 @TypeConverters(Converters::class)

@@ -56,6 +56,14 @@ interface EventDao {
     @Query("SELECT * FROM event WHERE project_uid = :projectUid AND defect_nos LIKE '%' || :defectNo || '%' ORDER BY last_edit_time DESC")
     fun getByDefectNoAndProjectUid(projectUid: String, defectNo: String): Flow<List<EventEntity>>
 
+    /** Get events that reference a specific defect by defect_uid. */
+    @Query("SELECT * FROM event WHERE defect_uids LIKE '%' || :defectUid || '%' ORDER BY last_edit_time DESC")
+    fun getByDefectUid(defectUid: String): Flow<List<EventEntity>>
+
+    /** Get events that reference a specific defect by defect_uid and project_uid. */
+    @Query("SELECT * FROM event WHERE project_uid = :projectUid AND defect_uids LIKE '%' || :defectUid || '%' ORDER BY last_edit_time DESC")
+    fun getByDefectUidAndProjectUid(projectUid: String, defectUid: String): Flow<List<EventEntity>>
+
     /** Get event by id. */
     @Query("SELECT * FROM event WHERE event_id = :id LIMIT 1")
     suspend fun getById(id: Long): EventEntity?

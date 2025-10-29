@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 15,
-    "identityHash": "6efa31aade62be6dc9a2ecd32ceba3f1",
+    "identityHash": "45303fa41e481da9259ce06759fc77a5",
     "entities": [
       {
         "tableName": "project",
@@ -548,7 +548,7 @@
       },
       {
         "tableName": "project_digital_asset",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `project_uids` TEXT NOT NULL, `node_id` TEXT NOT NULL, `parent_id` TEXT, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `file_id` TEXT, `local_path` TEXT, `download_status` TEXT NOT NULL, `download_url` TEXT, `file_size` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `content` TEXT)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `project_uids` TEXT NOT NULL, `node_id` TEXT NOT NULL, `parent_id` TEXT, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `file_id` TEXT, `resource_id` TEXT, `local_path` TEXT, `download_status` TEXT NOT NULL, `download_url` TEXT, `file_size` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `content` TEXT)",
         "fields": [
           {
             "fieldPath": "id",
@@ -589,6 +589,12 @@
           {
             "fieldPath": "fileId",
             "columnName": "file_id",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "resourceId",
+            "columnName": "resource_id",
             "affinity": "TEXT",
             "notNull": false
           },
@@ -685,7 +691,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6efa31aade62be6dc9a2ecd32ceba3f1')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '45303fa41e481da9259ce06759fc77a5')"
     ]
   }
 }

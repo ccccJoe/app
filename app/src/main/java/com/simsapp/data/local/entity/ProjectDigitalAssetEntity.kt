@@ -57,6 +57,10 @@ data class ProjectDigitalAssetEntity(
     @ColumnInfo(name = "file_id") 
     val fileId: String?,
     
+    /** Resource ID from project_digital_asset_tree node. */
+    @ColumnInfo(name = "resource_id") 
+    val resourceId: String?,
+    
     /** Local file absolute path where the downloaded file is stored. */
     @ColumnInfo(name = "local_path") 
     val localPath: String?,

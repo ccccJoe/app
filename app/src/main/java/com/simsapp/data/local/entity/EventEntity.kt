@@ -44,6 +44,8 @@ data class EventEntity(
     @ColumnInfo(name = "project_uid", defaultValue = "") val projectUid: String,
     /** Related defect ids (JSON list via TypeConverters). */
     @ColumnInfo(name = "defect_ids") val defectIds: List<Long> = emptyList(),
+    /** Related defect unique identifiers (JSON list via TypeConverters). */
+    @ColumnInfo(name = "defect_uids") val defectUids: List<String> = emptyList(),
     /** Related defect numbers (JSON list via TypeConverters). */
     @ColumnInfo(name = "defect_nos") val defectNos: List<String> = emptyList(),
     /** Optional location string (e.g., GPS or description). */
@@ -65,5 +67,7 @@ data class EventEntity(
     /** Audio file paths as JSON list via TypeConverters. */
     @ColumnInfo(name = "audio_files") val audioFiles: List<String> = emptyList(),
     /** Draft flag to indicate the event is not finalized and created via real-time autosave. */
-    @ColumnInfo(name = "is_draft") val isDraft: Boolean = true
+    @ColumnInfo(name = "is_draft") val isDraft: Boolean = true,
+    /** Structural Defect Details data as JSON string containing all SDD form fields. */
+    @ColumnInfo(name = "structural_defect_details") val structuralDefectDetails: String? = null
 )

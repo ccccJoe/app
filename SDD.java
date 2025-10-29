@@ -1,0 +1,34 @@
+	protected String sddStructralAndLocationIdentificationTypeOfStructure;
+	protected String sddStructralAndLocationIdentificationBuildingMaterial;
+	protected String sddStructralAndLocationIdentificationDefectComponent;
+	protected String sddStructralAndLocationIdentificationDefectLocation;
+	protected String sddStructralAndLocationIdentificationDefectOnComponent;
+	protected String sddStructralAndLocationIdPositionOfDefectComponent;
+	protected String sddStructralAndLocationIdentificationComponentProfile;
+	protected String sddStructralAndLocationIdentificationSummary;
+
+	protected String sddDefectDescriptionStructuralConcerns;
+	protected String sddDefectDescriptionDefectSeverity;
+	protected String sddDefectDescriptionDeformation;
+	protected String sddDefectDescriptionDefectExtentType;
+	protected String sddDefectDescriptionDefectExtentQuantity;
+	protected String sddDefectDescriptionSummary;
+
+	protected String sddConnectionSupportArrangement;
+	protected String sddConnectionFixingNature;
+	protected String sddConnectionDefectComponentFunction;
+	protected String sddConnectionSummary;
+
+	protected String sddOperatingConditionsAndEnvEffectsStructureLocation;
+	protected String sddOperConditionsAndEnvEffectsDefectComponentLoading;
+	protected String sddOperatingConditionsAndEnvEffectsImpactDamage;
+	protected String sddOperatingConditionsAndEnvEffectsDynamicEffect;
+	protected String sddOperatingConditionsAndEnvEffectsWindEffect;
+	protected String sddOperatingConditionsAndEnvEffectsChemicalEffect;
+	protected String sddOperatingConditionsAndEnvEffectsSummary;
+
+	protected String sddOtherIssuesLooseObject;
+	protected String sddOtherIssuesDustAndMaterialSpill;
+	protected String sddOtherIssuesAccessToHazardArea;
+	protected String sddOtherIssuesPersonnelPresenceInArea;
+	protected String sddOtherIssuesSummary;

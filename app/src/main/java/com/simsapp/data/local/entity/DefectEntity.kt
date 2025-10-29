@@ -29,12 +29,15 @@ import androidx.room.PrimaryKey
     ],
     indices = [
         Index(value = ["project_id"]),
+        Index(value = ["uid"]),
         Index(value = ["project_uid", "defect_no"], unique = true)
     ],
 )
 data class DefectEntity(
     /** Primary key of the defect (auto-generated). */
     @PrimaryKey(autoGenerate = true) @ColumnInfo(name = "defect_id") val defectId: Long = 0,
+    /** Remote unique identifier (UID) for defect, used for cross-device linking. */
+    @ColumnInfo(name = "uid", defaultValue = "") val uid: String = "",
     /** Project foreign key. */
     @ColumnInfo(name = "project_id") val projectId: Long,
     /** Project unique identifier for direct association without joins. */

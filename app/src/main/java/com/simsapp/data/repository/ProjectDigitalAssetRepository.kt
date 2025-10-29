@@ -135,6 +135,7 @@ class ProjectDigitalAssetRepository @Inject constructor(
                         projectUids = updatedProjectUids,
                         name = node.nodeName ?: existingAsset.name, // 更新名称
                         fileSize = node.fileSize ?: existingAsset.fileSize, // 更新文件大小
+                        resourceId = node.resourceId ?: existingAsset.resourceId, // 更新resource_id
                         updatedAt = System.currentTimeMillis()
                     )
                     
@@ -151,6 +152,7 @@ class ProjectDigitalAssetRepository @Inject constructor(
                             else -> "folder"
                         },
                         fileId = node.fileId,
+                        resourceId = node.resourceId, // 保存resource_id
                         localPath = null, // 新资产没有本地路径
                         downloadStatus = "PENDING", // 新资产状态为待下载
                         downloadUrl = null, // 新资产没有下载URL

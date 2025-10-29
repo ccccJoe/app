@@ -101,6 +101,38 @@ class EventDirectoryMigrationUtil @Inject constructor(
         eventDir.mkdirs()
         
         // 创建meta.json文件
+        val riskData = mutableMapOf<String, Any>()
+        riskData["level"] = event.riskLevel ?: ""
+        riskData["score"] = event.riskScore ?: 0.0
+        
+        // 将risk_answers数据直接作为answers字段，不进行解析转换
+            if (!event.riskAnswers.isNullOrEmpty()) {
+                try {
+                    // 直接将原始的risk_answers JSON字符串作为answers字段的值
+                    val gson = com.google.gson.Gson()
+                    val rawAnswersData = gson.fromJson(event.riskAnswers, Any::class.java)
+                    riskData["answers"] = rawAnswersData
+                } catch (e: Exception) {
+                    Log.w("EventMigration", "Failed to parse risk answers JSON: ${e.message}")
+                    riskData["answers"] = event.riskAnswers as Any
+                }
+            } else {
+                riskData["answers"] = ""
+            }
+        
+        // 将结构缺陷详情改为对象写入：解析为 JsonObject，失败时写入空对象
+        val structuralJsonObj = try {
+            val src = event.structuralDefectDetails
+            if (!src.isNullOrBlank()) {
+                com.google.gson.JsonParser.parseString(src).asJsonObject
+            } else {
+                com.google.gson.JsonObject()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("EventMigration", "Failed to parse structuralDefectDetails to object: ${e.message}")
+            com.google.gson.JsonObject()
+        }
+
         val metaData = mapOf(
             "eventId" to event.eventId,
             "uid" to event.uid,
@@ -109,13 +141,13 @@ class EventDirectoryMigrationUtil @Inject constructor(
             "location" to (event.location ?: ""),
             "content" to (event.content ?: ""),
             "lastEditTime" to event.lastEditTime,
-            "riskLevel" to (event.riskLevel ?: ""),
-            "riskScore" to (event.riskScore ?: 0.0),
+            "risk" to riskData,
             "photoFiles" to (event.photoFiles ?: emptyList()),
             "audioFiles" to (event.audioFiles ?: emptyList()),
             "defectIds" to (event.defectIds ?: emptyList()),
             "defectNos" to (event.defectNos ?: emptyList()),
-            "isDraft" to event.isDraft
+            "isDraft" to event.isDraft,
+            "structuralDefectDetails" to structuralJsonObj
         )
         
         val metaFile = File(eventDir, "meta.json")

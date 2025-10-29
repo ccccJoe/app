@@ -36,7 +36,8 @@ object DigitalAssetTreeParser {
         val fileSize: Long?,
         val rawNodeJson: String,
         val nodeId: String?, // 节点的id字段
-        val parentId: String? // 节点的p_id字段
+        val parentId: String?, // 节点的p_id字段
+        val resourceId: String? // 节点的resource_id字段
     )
 
     /**
@@ -121,9 +122,10 @@ object DigitalAssetTreeParser {
                 if (fileId.isNotEmpty() && fileId != "null") {
                     android.util.Log.d("DigitalAssetParser", "Found file_id: $fileId at path: $currentPath")
                     
-                    // Extract node id and parent id from JSON
+                    // Extract node id, parent id and resource_id from JSON
                     val nodeId = node.optString("id").takeIf { it.isNotEmpty() && it != "null" }
                     val parentId = node.optString("p_id").takeIf { it.isNotEmpty() && it != "null" }
+                    val resourceId = node.optString("resource_id").takeIf { it.isNotEmpty() && it != "null" }
                     
                     val fileType = extractFileType(node)
                     android.util.Log.d("DigitalAssetParser", "Node file_type: $fileType")
@@ -139,7 +141,8 @@ object DigitalAssetTreeParser {
                             ?: node.optLong("size").takeIf { it > 0 },
                         rawNodeJson = node.toString(),
                         nodeId = nodeId,
-                        parentId = parentId
+                        parentId = parentId,
+                        resourceId = resourceId
                     )
                     assetNodes.add(assetNode)
                 } else if (fileId.isEmpty() || fileId == "null") {

@@ -45,6 +45,8 @@ import com.simsapp.data.repository.ProjectRepository
 import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.Icon
 import com.simsapp.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Data class: RiskAnswer
@@ -73,7 +75,24 @@ data class RiskAnswer(
 data class RiskAssessmentResult(
     val level: String,
     val score: Double,
-    val answers: List<RiskAnswer>? = null
+    val answers: List<RiskAnswer>? = null,
+    val assessmentData: RiskAssessmentData? = null
+)
+
+/**
+ * Data class: RiskAssessmentData
+ * - 新的风险评估数据格式，按照对象格式保存
+ * - 用于替代之前的answers数组格式
+ */
+data class RiskAssessmentData(
+    val risk_cost: String,
+    val risk_safety: String,
+    val risk_other: String,
+    val risk_potential_production_loss: String,
+    val risk_likelihood: String,
+    val risk_rating: String,
+    val risk_action_required_remediation_timeframe: String,
+    val risk_matrix_id: String
 )
 
 /**
@@ -147,7 +166,11 @@ fun RiskAssessmentWizardDialog(
     onDismiss: (RiskAssessmentResult?) -> Unit,
     loader: RiskMatrixLoader? = null,
     // initialAnswers: 上次保存的答案列表，用于在弹窗中预选各步骤的选项，提升编辑体验
-    initialAnswers: List<RiskAnswer>? = null
+    initialAnswers: List<RiskAnswer>? = null,
+    // projectUid: 项目UID，用于获取风险矩阵ID
+    projectUid: String? = null,
+    // projectDigitalAssetDao: 数字资产DAO，用于查询风险矩阵资产
+    projectDigitalAssetDao: com.simsapp.data.local.dao.ProjectDigitalAssetDao? = null
 ) {
     // 加载远程配置
     var loading by remember { mutableStateOf(true) }
@@ -169,15 +192,35 @@ fun RiskAssessmentWizardDialog(
     fun inclusiveRight(c: String) = c.endsWith("]")
 
     /**
+     * 根据可能性分值获取action_required_and_remediation_timeframe
+     */
+    fun getActionRequiredTimeframe(likelihoodValue: Double): String {
+        return when {
+            likelihoodValue >= 4.0 -> "Immediate action required"
+            likelihoodValue >= 3.0 -> "Action required within 24 hours"
+            likelihoodValue >= 2.0 -> "Action required within 1 week"
+            likelihoodValue >= 1.0 -> "Action required within 1 month"
+            else -> "Monitor and review"
+        }
+    }
+
+    /**
      * 计算结果并构造答案清单。
      *
      * @param selections 用户在 5 个步骤中的选择索引（允许 null）
+     * @param projectUid 项目UID，用于获取风险矩阵ID
+     * @param projectDigitalAssetDao 数字资产DAO，用于查询风险矩阵资产
      * @return RiskAssessmentResult 包含 level / score / answers（answers 可为空以兼容旧数据）
      */
-    fun computeResult(selections: List<Int?>): RiskAssessmentResult? {
+    suspend fun computeResult(
+        selections: List<Int?>,
+        projectUid: String? = null,
+        projectDigitalAssetDao: com.simsapp.data.local.dao.ProjectDigitalAssetDao? = null
+    ): RiskAssessmentResult? {
         val p = payload ?: return null
         // 防越界：前四题存在 "Not applicable" 追加项，其索引等于 consequenceData.size，需按 0 分处理
-        val s1 = selections.take(4).map { sel ->
+        // 修改：只取前三个问题的最大值，而不是前四个问题
+        val s1 = selections.take(3).map { sel ->
             sel?.let { i -> if (i in p.consequenceData.indices) p.consequenceData[i].severityFactor else 0.0 } ?: 0.0
         }
         // 防越界：第五题无 NA 选项，但仍做索引保护
@@ -235,9 +278,51 @@ fun RiskAssessmentWizardDialog(
                 )
             )
         }
+        
+        // 获取风险矩阵ID
+        var riskMatrixId = "default_matrix_id"
+        if (!projectUid.isNullOrBlank() && projectDigitalAssetDao != null) {
+            try {
+                // 查询当前项目的风险矩阵资产
+                val completedAssets = projectDigitalAssetDao.getCompletedByProjectUid(projectUid)
+                val riskMatrixAsset = completedAssets.find { 
+                    it.type.equals("RISK_MATRIX", ignoreCase = true) && !it.resourceId.isNullOrBlank()
+                }
+                riskMatrixId = riskMatrixAsset?.resourceId ?: "default_matrix_id"
+                android.util.Log.d("RiskAssessment", "Found risk matrix ID: $riskMatrixId for project: $projectUid")
+            } catch (e: Exception) {
+                android.util.Log.e("RiskAssessment", "Failed to get risk matrix ID for project: $projectUid", e)
+            }
+        }
+        
+        // 获取时间框架
+        val timeframe = getActionRequiredTimeframe(s5)
+        
+        // 构建新的对象格式数据：使用原始数值字符串（移除无意义的尾随0）
+        val assessmentData = RiskAssessmentData(
+            risk_cost = (selections.getOrNull(0)?.let { sel ->
+                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
+            } ?: 0.0).toRawString(),
+            risk_safety = (selections.getOrNull(1)?.let { sel ->
+                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
+            } ?: 0.0).toRawString(),
+            risk_other = (selections.getOrNull(2)?.let { sel ->
+                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
+            } ?: 0.0).toRawString(),
+            risk_potential_production_loss = (selections.getOrNull(3)?.let { sel ->
+                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
+            } ?: 0.0).toRawString(),
+            risk_likelihood = s5.toRawString(),
+            risk_rating = level,
+            risk_action_required_remediation_timeframe = timeframe,
+            risk_matrix_id = riskMatrixId
+        )
+        
         // 返回 priorityData 中定义的优先级编码（P1~P4），score 保持 Double 精度，不做取整或四舍五入
-        return RiskAssessmentResult(level = level, score = finalScore, answers = answers)
+        return RiskAssessmentResult(level = level, score = finalScore, answers = answers, assessmentData = assessmentData)
     }
+
+    
 
     Dialog(onDismissRequest = { onDismiss(null) }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(modifier = Modifier.fillMaxSize().background(Color(0x33000000))) {
@@ -298,6 +383,7 @@ fun RiskAssessmentWizardDialog(
                             var index by remember { mutableStateOf(0) }
                             val selections = remember { mutableStateListOf<Int?>(*(Array(steps.size) { null })) }
                             var naCount by remember { mutableStateOf(0) }
+                            var isComputing by remember { mutableStateOf(false) }
 
                             // 根据 initialAnswers 进行预选与 NA 次数回显
                             LaunchedEffect(initialAnswers, p) {
@@ -313,6 +399,15 @@ fun RiskAssessmentWizardDialog(
                                         val sel = selections[sIdx]
                                         sel != null && sel >= p.consequenceData.size
                                     }
+                                }
+                            }
+
+                            // 处理计算结果
+                            LaunchedEffect(isComputing) {
+                                if (isComputing) {
+                                    val r = computeResult(selections.toList(), projectUid, projectDigitalAssetDao)
+                                    if (r != null) onDismiss(r) else onDismiss(null)
+                                    isComputing = false
                                 }
                             }
 
@@ -381,9 +476,8 @@ fun RiskAssessmentWizardDialog(
                                             if (selections[index] == null) return@Button
                                             index += 1
                                         } else {
-                                            // 完成计算
-                                            val r = computeResult(selections.toList())
-                                            if (r != null) onDismiss(r) else onDismiss(null)
+                                            // 完成计算 - 触发计算状态
+                                            isComputing = true
                                         }
                                     },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
@@ -397,6 +491,14 @@ fun RiskAssessmentWizardDialog(
     } // Close Box
   } // Close Dialog
 } // Close RiskAssessmentWizardDialog
+
+/**
+ * 扩展函数：将 Double 原始值转换为字符串，保留原始语义，不添加无意义的小数位。
+ * - 若为整数（如 2.0），输出 "2"；否则输出原始 Double 文本（如 2.5）。
+ */
+private fun Double.toRawString(): String {
+    return if (this % 1.0 == 0.0) this.toInt().toString() else this.toString()
+}
 
 /**
  * 函数：buildRiskMatrixLoaderFromRepository

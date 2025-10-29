@@ -1,5 +1,6 @@
 package com.example.sims_android.ui.event
 
+import android.app.Activity
 import android.Manifest
 import android.media.MediaRecorder
 import android.os.Build
@@ -21,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
@@ -60,6 +62,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.simsapp.data.local.entity.DefectEntity
 import com.simsapp.data.local.entity.EventEntity
+import com.simsapp.ui.event.StructuralDefectWizardDialog
+import com.simsapp.ui.event.StructuralDefectData
 import com.example.sims_android.ui.event.EventFormViewModel
 import com.example.sims_android.ui.event.DigitalAssetDetail
 import com.simsapp.ui.common.RiskTagColors
@@ -102,6 +106,7 @@ import kotlin.math.PI
 import kotlin.math.sin
 import kotlin.math.abs
 import android.util.Log
+import com.google.gson.Gson
 
 /**
  * Composable: EventFormScreen
@@ -149,8 +154,30 @@ import android.util.Log
      // 录音进行中的临时文件，录制成功后再加入列�?
      var pendingAudio by remember { mutableStateOf<File?>(null) }
      // 风险评估向导弹窗显示状态与结果缓存
-     var showRiskDialog by remember { mutableStateOf(false) }
-     var riskResult by remember { mutableStateOf<RiskAssessmentResult?>(null) }
+    var showRiskDialog by remember { mutableStateOf(false) }
+    var riskResult by remember { mutableStateOf<RiskAssessmentResult?>(null) }
+    // 结构缺陷详情数据（对象与原始JSON双轨保存，原始JSON保留summary字段）
+    var structuralDefectResult by remember { mutableStateOf<StructuralDefectData?>(null) }
+    var structuralDefectJsonRaw by remember { mutableStateOf<String?>(null) }
+    
+    // 新增：Structural Defect Activity Result Launcher
+    val structuralDefectLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val resultData = result.data?.getStringExtra(StructuralDefectActivity.EXTRA_RESULT_DATA)
+            resultData?.let { dataJson ->
+                structuralDefectJsonRaw = dataJson // 保留原始JSON，包含各步summary
+                try {
+                    val data = Gson().fromJson(dataJson, StructuralDefectData::class.java)
+                    structuralDefectResult = data
+                    Log.d("EventFormScreen", "Received structural defect data (raw len=${dataJson.length}): $data")
+                } catch (e: Exception) {
+                    Log.e("EventFormScreen", "Failed to parse structural defect result: ${e.message}", e)
+                }
+            }
+        }
+    }
      // 删除确认弹窗显示状态（仅编辑态）
     var showDeleteDialog by remember { mutableStateOf(false) }
     // 删除状态标记，用于阻止删除后的自动保存
@@ -264,7 +291,8 @@ import android.util.Log
                         photoFiles = photoFiles,
                         audioFiles = audioFiles,
                         selectedDefects = selectedDefects.toList(),
-                        digitalAssetFileIds = currentSelectedStorageFileIds
+                        digitalAssetFileIds = currentSelectedStorageFileIds,
+                        structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
                     )
                     
                     result.onSuccess { savedEventId ->
@@ -329,7 +357,8 @@ import android.util.Log
                                 photoFiles = photoFiles,
                                 audioFiles = audioFiles,
                                 selectedDefects = selectedDefects.toList(),
-                                digitalAssetFileIds = currentSelectedStorageFileIds // 修改：使用currentSelectedStorageFileIds传递数字资产file_id列表
+                                digitalAssetFileIds = currentSelectedStorageFileIds, // 修改：使用currentSelectedStorageFileIds传递数字资产file_id列表
+                                structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
                             )
                             
                             result.onSuccess { savedEventId ->
@@ -412,22 +441,34 @@ import android.util.Log
                         eventRoomId = eventEntity.eventId
                         loadedEventUid = eventEntity.uid // 存储事件UID
                         
-                        // 回显风险评估结果
+                        // 回显风险评估结果（兼容 answers 数组与 assessmentData 对象两种格式）
                         if (eventEntity.riskLevel != null && eventEntity.riskScore != null) {
-                            val answers = eventEntity.riskAnswers?.let { answersJson ->
-                                try {
-                                    val gson = com.google.gson.Gson()
-                                    val type = object : com.google.gson.reflect.TypeToken<List<RiskAnswer>>() {}.type
-                                    gson.fromJson<List<RiskAnswer>>(answersJson, type)
+                            val gson = com.google.gson.Gson()
+                            var parsedAnswers: List<RiskAnswer>? = null
+                            var parsedAssessmentData: RiskAssessmentData? = null
+                            eventEntity.riskAnswers?.let { answersJson ->
+                                // 优先尝试解析为新的对象格式 RiskAssessmentData
+                                parsedAssessmentData = try {
+                                    gson.fromJson(answersJson, RiskAssessmentData::class.java)
                                 } catch (e: Exception) {
-                                    Log.e("EventFormScreen", "Failed to parse risk answers: ${e.message}", e)
                                     null
+                                }
+                                // 如果不是对象格式，则尝试解析为旧的数组格式 List<RiskAnswer>
+                                if (parsedAssessmentData == null) {
+                                    parsedAnswers = try {
+                                        val type = object : com.google.gson.reflect.TypeToken<List<RiskAnswer>>() {}.type
+                                        gson.fromJson<List<RiskAnswer>>(answersJson, type)
+                                    } catch (e: Exception) {
+                                        Log.e("EventFormScreen", "Failed to parse risk answers: ${e.message}", e)
+                                        null
+                                    }
                                 }
                             }
                             riskResult = RiskAssessmentResult(
                                 level = eventEntity.riskLevel!!,
                                 score = eventEntity.riskScore!!,
-                                answers = answers
+                                answers = parsedAnswers,
+                                assessmentData = parsedAssessmentData
                             )
                         }
                         
@@ -449,6 +490,18 @@ import android.util.Log
                             }
                         }
                         
+                        // 回显 Structural Defect Details
+                        if (!eventEntity.structuralDefectDetails.isNullOrBlank()) {
+                            try {
+                                val gson = Gson()
+                                structuralDefectJsonRaw = eventEntity.structuralDefectDetails
+                                structuralDefectResult = gson.fromJson(eventEntity.structuralDefectDetails, StructuralDefectData::class.java)
+                                Log.d("EventFormScreen", "Restored structural defect details: ${structuralDefectResult}")
+                            } catch (e: Exception) {
+                                Log.e("EventFormScreen", "Failed to parse structural defect details: ${e.message}", e)
+                            }
+                        }
+                        
                         // 回显数字资产选择 - 从新的assets字段中提取file_id和文件名
                         val assetFileIds = eventEntity.assets.map { it.fileId }
                         val assetFileNames = eventEntity.assets.map { it.fileName }
@@ -466,11 +519,12 @@ import android.util.Log
                         initialDigitalAssetFileIds = assetFileIds
                         Log.d("EventFormScreen", "Restored digital assets: ${eventEntity.assets.size} files")
                         
-                        // 加载关联的缺陷信�?
-                        if (eventEntity.defectIds.isNotEmpty() || eventEntity.defectNos.isNotEmpty()) {
+                        // 加载关联的缺陷信息（支持 defectIds / defectNos / defectUids）
+                        if (eventEntity.defectIds.isNotEmpty() || eventEntity.defectNos.isNotEmpty() || eventEntity.defectUids.isNotEmpty()) {
                             // 在协程外部保存eventEntity的引�?
                             val defectIds = eventEntity.defectIds
                             val defectNos = eventEntity.defectNos
+                            val defectUids = eventEntity.defectUids
                             val projectUid = eventEntity.projectUid
                             
                             scope.launch {
@@ -493,6 +547,20 @@ import android.util.Log
                                                 if (!defects.any { existingDefect -> existingDefect.defectId == d.defectId }) {
                                                     defects.add(d)
                                                 }
+                                            }
+                                        }
+                                    }
+
+                                    // 通过 defectUids 加载缺陷
+                                    defectUids.forEach { uid: String ->
+                                        val defect = if (projectUid.isNotBlank()) {
+                                            viewModel.getDefectByProjectUidAndUid(projectUid, uid)
+                                        } else {
+                                            viewModel.getDefectByUid(uid)
+                                        }
+                                        defect?.let { d: DefectEntity ->
+                                            if (!defects.any { existingDefect -> existingDefect.defectId == d.defectId }) {
+                                                defects.add(d)
                                             }
                                         }
                                     }
@@ -535,31 +603,64 @@ import android.util.Log
                     if (location.isBlank()) location = obj.optString("location", "")
                     if (description.isBlank()) description = obj.optString("description", "")
                     
-                    // 如果数据库中没有风险评估结果，则从meta.json中读�?
+                    // 如果数据库中没有风险评估结果，则从meta.json中读取，兼容对象与数组两种格式
                     if (riskResult == null) {
                         val riskObj = obj.optJSONObject("risk")
                         if (riskObj != null) {
-                            val level = riskObj.optString("priority", "")
+                            // 兼容旧键名：优先读取level，若为空则回退priority
+                            var level = riskObj.optString("level", "")
+                            if (level.isBlank()) level = riskObj.optString("priority", "")
                             val score = riskObj.optDouble("score", 0.0)
-                            // 解析 answers（如不存在则�?null�?
-                            val answersArr = riskObj.optJSONArray("answers")
-                            val answers = if (answersArr != null) {
-                                val list = mutableListOf<RiskAnswer>()
-                                for (i in 0 until answersArr.length()) {
-                                    val a = answersArr.optJSONObject(i) ?: continue
-                                    list.add(
-                                        RiskAnswer(
-                                            stepIndex = a.optInt("stepIndex", i + 1),
-                                            question = a.optString("question", ""),
-                                            optionIndex = a.optInt("optionIndex", 0),
-                                            optionText = a.optString("optionText", ""),
-                                            value = a.optDouble("value", 0.0)
-                                        )
-                                    )
+
+                            var parsedAnswers: List<RiskAnswer>? = null
+                            var parsedAssessmentData: RiskAssessmentData? = null
+
+                            val answersAny = riskObj.opt("answers")
+                            when (answersAny) {
+                                is org.json.JSONObject -> {
+                                    // 新对象格式：RiskAssessmentData
+                                    parsedAssessmentData = try {
+                                        Gson().fromJson(answersAny.toString(), RiskAssessmentData::class.java)
+                                    } catch (_: Exception) { null }
                                 }
-                                list
-                            } else null
-                            if (level.isNotBlank()) riskResult = RiskAssessmentResult(level = level, score = score, answers = answers)
+                                is org.json.JSONArray -> {
+                                    // 旧数组格式：List<RiskAnswer>
+                                    val list = mutableListOf<RiskAnswer>()
+                                    for (i in 0 until answersAny.length()) {
+                                        val a = answersAny.optJSONObject(i) ?: continue
+                                        list.add(
+                                            RiskAnswer(
+                                                stepIndex = a.optInt("stepIndex", i + 1),
+                                                question = a.optString("question", ""),
+                                                optionIndex = a.optInt("optionIndex", 0),
+                                                optionText = a.optString("optionText", ""),
+                                                value = a.optDouble("value", 0.0)
+                                            )
+                                        )
+                                    }
+                                    parsedAnswers = list
+                                }
+                                is String -> {
+                                    // 若为字符串，尝试解析为对象或数组
+                                    val s = answersAny as String
+                                    parsedAssessmentData = runCatching { Gson().fromJson(s, RiskAssessmentData::class.java) }.getOrNull()
+                                    if (parsedAssessmentData == null) {
+                                        parsedAnswers = try {
+                                            val type = object : com.google.gson.reflect.TypeToken<List<RiskAnswer>>() {}.type
+                                            Gson().fromJson<List<RiskAnswer>>(s, type)
+                                        } catch (_: Exception) { null }
+                                    }
+                                }
+                            }
+
+                            if (level.isNotBlank()) {
+                                riskResult = RiskAssessmentResult(
+                                    level = level,
+                                    score = score,
+                                    answers = parsedAnswers,
+                                    assessmentData = parsedAssessmentData
+                                )
+                            }
                         }
                     }
                     
@@ -602,6 +703,34 @@ import android.util.Log
                                 }
                             }
                             currentSelectedStorageFileIds = fileIds
+                        }
+                    }
+                    
+                    // 如果数据库中没有结构缺陷详情，则从meta.json中读取（兼容对象与旧字符串）
+                    if (structuralDefectResult == null) {
+                        val fieldAny = obj.opt("structuralDefectDetails")
+                        when (fieldAny) {
+                            is org.json.JSONObject -> {
+                                try {
+                                    val jsonStr = fieldAny.toString()
+                                    structuralDefectResult = Gson().fromJson(jsonStr, StructuralDefectData::class.java)
+                                    Log.d("EventFormScreen", "Loaded structural defect details (object) from meta.json")
+                                } catch (e: Exception) {
+                                    Log.e("EventFormScreen", "Failed to parse object structural defect details: ${e.message}", e)
+                                }
+                            }
+                            is String -> {
+                                val structuralDefectDetailsStr = fieldAny
+                                if (structuralDefectDetailsStr.isNotBlank()) {
+                                    try {
+                                        structuralDefectResult = Gson().fromJson(structuralDefectDetailsStr, StructuralDefectData::class.java)
+                                        Log.d("EventFormScreen", "Loaded structural defect details (string) from meta.json")
+                                    } catch (e: Exception) {
+                                        Log.e("EventFormScreen", "Failed to parse structural defect details from meta.json: ${e.message}", e)
+                                    }
+                                }
+                            }
+                            else -> { /* ignore */ }
                         }
                     }
                 }.onFailure { e ->
@@ -865,6 +994,55 @@ import android.util.Log
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Spacer(Modifier.height(12.dp))
+
+                // 结构缺陷详情按钮
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { 
+                            val intent = StructuralDefectActivity.createIntent(context, structuralDefectResult)
+                            structuralDefectLauncher.launch(intent)
+                        },
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
+                    border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Structural Defect Details",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF1565C0)
+                            )
+                            if (structuralDefectResult != null) {
+                                Text(
+                                    text = "Details completed",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF4CAF50)
+                                )
+                            } else {
+                                Text(
+                                    text = "Click to add structural defect details",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF666666)
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Open Structural Defect Details",
+                            tint = Color(0xFF666666)
+                        )
+                    }
+                }
 
                 Spacer(Modifier.height(12.dp))
 
@@ -1152,7 +1330,8 @@ import android.util.Log
                                     photoFiles = photoFiles,
                                     audioFiles = audioFiles,
                                     selectedDefects = selectedDefects,
-                                    digitalAssetFileIds = currentSelectedStorageFileIds
+                                    digitalAssetFileIds = currentSelectedStorageFileIds,
+                                    structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
                                 )
                                 
                                 isSaving = false
@@ -1198,7 +1377,9 @@ import android.util.Log
             },
             loader = projectUid?.let { viewModel.createRiskMatrixLoader(it) } 
                 ?: viewModel.createRiskMatrixLoaderByName(projectName),
-            initialAnswers = riskResult?.answers
+            initialAnswers = riskResult?.answers,
+            projectUid = projectUid,
+            projectDigitalAssetDao = viewModel.projectDigitalAssetDao
         )
     }
     
@@ -1272,7 +1453,8 @@ import android.util.Log
                             photoFiles = photoFiles,
                             audioFiles = audioFiles,
                             selectedDefects = selectedDefects.toList(),
-                            digitalAssetFileIds = currentSelectedStorageFileIds
+                            digitalAssetFileIds = currentSelectedStorageFileIds,
+                            structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
                         )
                         
                         result.onSuccess { savedEventId ->

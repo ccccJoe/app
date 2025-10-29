@@ -1,0 +1,10 @@
+{
+    "risk_cost": "2",
+    "risk_safety": "3",
+    "risk_other": "4",
+    "risk_potential_production_loss": "5",
+    "risk_likelihood": "6",
+    "risk_action_required_remediation_timeframe": "7",
+    "risk_rating": "8",
+    "risk_matrix_id": "1"
+}

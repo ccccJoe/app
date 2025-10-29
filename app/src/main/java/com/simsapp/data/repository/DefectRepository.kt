@@ -33,6 +33,13 @@ class DefectRepository @Inject constructor(
     /** Get defect by id. */
     suspend fun getDefectById(defectId: Long): DefectEntity? = dao.getById(defectId)
 
+    /** Get defect by remote uid. */
+    suspend fun getDefectByUid(uid: String): DefectEntity? = dao.getByUid(uid)
+
+    /** Get defect by project_uid and remote uid. */
+    suspend fun getDefectByProjectUidAndUid(projectUid: String, uid: String): DefectEntity? =
+        dao.getByProjectUidAndUid(projectUid, uid)
+
     /** Create or update a defect. */
     suspend fun upsert(defect: DefectEntity): Long = dao.insert(defect)
     

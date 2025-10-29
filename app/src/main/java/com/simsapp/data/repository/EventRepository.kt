@@ -50,6 +50,13 @@ class EventRepository @Inject constructor(
     fun getEventsByDefectNoAndProjectUid(projectUid: String, defectNo: String): Flow<List<EventEntity>> = 
         dao.getByDefectNoAndProjectUid(projectUid, defectNo)
 
+    /** Observe events that reference a specific defect by defect_uid. */
+    fun getEventsByDefectUid(defectUid: String): Flow<List<EventEntity>> = dao.getByDefectUid(defectUid)
+
+    /** Observe events that reference a specific defect by defect_uid and project_uid. */
+    fun getEventsByDefectUidAndProjectUid(projectUid: String, defectUid: String): Flow<List<EventEntity>> =
+        dao.getByDefectUidAndProjectUid(projectUid, defectUid)
+
     /** Create or update an event. */
     suspend fun upsert(event: EventEntity): Long = dao.insert(event)
     
@@ -200,8 +207,17 @@ class EventRepository @Inject constructor(
             android.util.Log.d("EventRepository", "  - ${file.name} (${if (file.isDirectory) "DIR" else "FILE"}, ${file.length()} bytes)")
         }
 
-        // Fix legacy placeholder extensions in meta.json and on disk before zipping (one-time migration)
-        fixLegacyPlaceholderExtensions(eventDir)
+        // 先根据数据库记录补齐事件目录中的媒体文件，并更新 meta.json
+        val eventEntity = try { getEventByUid(eventUid) } catch (_: Exception) { null }
+        reconcileAssetsFromDb(eventDir, eventEntity)
+
+        // 再修复旧版占位符扩展并确保 meta.json 关键字段完整
+        fixLegacyPlaceholderExtensions(
+            eventDir,
+            eventEntity?.structuralDefectDetails,
+            defectNosFromDb = eventEntity?.defectNos,
+            defectUidsFromDb = eventEntity?.defectUids
+        )
 
         // 1) 压缩为zip
         val cacheDir = File(context.cacheDir, "sync_zip").apply { mkdirs() }
@@ -363,16 +379,224 @@ class EventRepository @Inject constructor(
     }
 
     /**
+     * 根据数据库中的 photoFiles/audioFiles，将缺失的媒体文件复制到事件目录，并同步更新 meta.json 的 photos/audios 列表。
+     * 该方法为幂等操作：如果文件已存在且 meta.json 已记录，则不会重复复制或写入。
+     * 目标命名规则保持与事件表单保存一致：photo_<index>.<ext>、audio_<index>.m4a。
+     */
+    private fun reconcileAssetsFromDb(eventDir: File, eventEntity: EventEntity?) {
+        if (eventEntity == null) return
+
+        val metaFile = File(eventDir, "meta.json")
+        val metaObj = try {
+            if (metaFile.exists()) org.json.JSONObject(metaFile.readText()) else org.json.JSONObject()
+        } catch (_: Exception) { org.json.JSONObject() }
+
+        // 读取 meta 中的两套键（兼容旧字段）并与目录实际文件合并去重
+        fun jsonArrayToList(obj: org.json.JSONObject, key: String): MutableList<String> {
+            val arr = obj.optJSONArray(key)
+            val list = mutableListOf<String>()
+            if (arr != null) for (i in 0 until arr.length()) list.add(arr.optString(i))
+            return list
+        }
+
+        val metaPhotos = jsonArrayToList(metaObj, "photos")
+        val metaPhotoFiles = jsonArrayToList(metaObj, "photoFiles")
+        val metaAudios = jsonArrayToList(metaObj, "audios")
+        val metaAudioFiles = jsonArrayToList(metaObj, "audioFiles")
+
+        val dirPhotoFiles = eventDir.listFiles()?.filter { it.isFile && it.name.startsWith("photo_") }?.map { it.name } ?: emptyList()
+        val dirAudioFiles = eventDir.listFiles()?.filter { it.isFile && it.name.startsWith("audio_") }?.map { it.name } ?: emptyList()
+
+        val existingPhotos = (metaPhotos + metaPhotoFiles + dirPhotoFiles).distinct().toMutableList()
+        val existingAudios = (metaAudios + metaAudioFiles + dirAudioFiles).distinct().toMutableList()
+
+        // 解析已有文件的最大索引，避免从 size 计数导致 0/1 重复
+        fun nextIndex(names: List<String>, prefix: String): Int {
+            var maxIdx = -1
+            names.forEach { name ->
+                if (name.startsWith(prefix)) {
+                    // 支持 photo_0.jpg、photo_0_1.jpg 取主索引 0
+                    val base = name.removePrefix(prefix)
+                    val numberPart = base.takeWhile { it.isDigit() }
+                    val idx = numberPart.toIntOrNull()
+                    if (idx != null && idx > maxIdx) maxIdx = idx
+                }
+            }
+            return maxIdx + 1
+        }
+
+        var photoIndex = nextIndex(dirPhotoFiles, "photo_")
+        var audioIndex = nextIndex(dirAudioFiles, "audio_")
+
+        // 如果目录中已有的媒体数量不小于数据库记录数量，则认为已完成复制，避免重复
+        val shouldCopyPhotos = eventEntity.photoFiles.isNotEmpty()
+        val shouldCopyAudios = eventEntity.audioFiles.isNotEmpty()
+
+        if (shouldCopyPhotos) {
+            eventEntity.photoFiles.forEach { path ->
+                try {
+                    val src = File(path)
+                    if (!src.exists()) {
+                        android.util.Log.w("EventRepository", "Photo src missing: $path")
+                        return@forEach
+                    }
+                    // 如果源文件已在事件目录中，跳过复制（避免自我复制导致重复）
+                    val srcParent = src.parentFile?.absolutePath
+                    if (srcParent != null && srcParent == eventDir.absolutePath) {
+                        android.util.Log.d("EventRepository", "Skip photo already inside eventDir: ${src.name}")
+                        return@forEach
+                    }
+
+                    // 以当前目录现状计算下一个索引，避免 size 计数造成重复
+                    val currentPhotoNames = eventDir.listFiles()
+                        ?.filter { it.isFile && it.name.startsWith("photo_") }
+                        ?.map { it.name } ?: emptyList()
+                    val ext = src.extension.ifBlank { "jpg" }
+                    val nextIdx = run {
+                        var maxIdx = -1
+                        currentPhotoNames.forEach { name ->
+                            if (name.startsWith("photo_")) {
+                                val base = name.removePrefix("photo_")
+                                val numberPart = base.takeWhile { it.isDigit() }
+                                val idx = numberPart.toIntOrNull()
+                                if (idx != null && idx > maxIdx) maxIdx = idx
+                            }
+                        }
+                        maxIdx + 1
+                    }
+                    val targetName = "photo_${nextIdx}.${ext}"
+                    val target = File(eventDir, targetName)
+                    if (target.exists()) {
+                        android.util.Log.d("EventRepository", "Photo target exists, skip: ${target.name}")
+                        existingPhotos.add(targetName)
+                        return@forEach
+                    }
+                    src.copyTo(target, overwrite = false)
+                    existingPhotos.add(targetName)
+                    android.util.Log.d("EventRepository", "Copied photo from DB: ${src.absolutePath} -> ${target.name}")
+                } catch (e: Exception) {
+                    android.util.Log.w("EventRepository", "Failed to copy photo $path: ${e.message}")
+                }
+            }
+        }
+
+        if (shouldCopyAudios) {
+            eventEntity.audioFiles.forEach { path ->
+                try {
+                    val src = File(path)
+                    if (!src.exists()) {
+                        android.util.Log.w("EventRepository", "Audio src missing: $path")
+                        return@forEach
+                    }
+                    val srcParent = src.parentFile?.absolutePath
+                    if (srcParent != null && srcParent == eventDir.absolutePath) {
+                        android.util.Log.d("EventRepository", "Skip audio already inside eventDir: ${src.name}")
+                        return@forEach
+                    }
+
+                    val currentAudioNames = eventDir.listFiles()
+                        ?.filter { it.isFile && it.name.startsWith("audio_") }
+                        ?.map { it.name } ?: emptyList()
+                    val nextIdx = run {
+                        var maxIdx = -1
+                        currentAudioNames.forEach { name ->
+                            if (name.startsWith("audio_")) {
+                                val base = name.removePrefix("audio_")
+                                val numberPart = base.takeWhile { it.isDigit() }
+                                val idx = numberPart.toIntOrNull()
+                                if (idx != null && idx > maxIdx) maxIdx = idx
+                            }
+                        }
+                        maxIdx + 1
+                    }
+                    val targetName = "audio_${nextIdx}.m4a"
+                    val target = File(eventDir, targetName)
+                    if (target.exists()) {
+                        android.util.Log.d("EventRepository", "Audio target exists, skip: ${target.name}")
+                        existingAudios.add(targetName)
+                        return@forEach
+                    }
+                    src.copyTo(target, overwrite = false)
+                    existingAudios.add(targetName)
+                    android.util.Log.d("EventRepository", "Copied audio from DB: ${src.absolutePath} -> ${target.name}")
+                } catch (e: Exception) {
+                    android.util.Log.w("EventRepository", "Failed to copy audio $path: ${e.message}")
+                }
+            }
+        }
+
+        // 同步写回：仅使用 photoFiles/audioFiles，并补充 assets（来自事件表）。不主动新增旧键 photos/audios。
+        try {
+            val photosArr = org.json.JSONArray(existingPhotos)
+            val audiosArr = org.json.JSONArray(existingAudios)
+            metaObj.put("photoFiles", photosArr)
+            metaObj.put("audioFiles", audiosArr)
+
+            // 读取现有 assets（如果有），避免重复；然后以数据库为准进行合并
+            val existingAssetsMap = mutableMapOf<String, String>() // fileId -> fileName
+            run {
+                try {
+                    val arr = metaObj.optJSONArray("assets")
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i)
+                            val fid = obj?.optString("fileId") ?: ""
+                            val fname = obj?.optString("fileName") ?: ""
+                            if (fid.isNotBlank()) existingAssetsMap[fid] = fname
+                        }
+                    }
+                } catch (_: Exception) { /* ignore */ }
+            }
+
+            // 以数据库 assets 作为权威来源，覆盖或补全
+            eventEntity.assets.forEach { item ->
+                val fid = item.fileId
+                val fname = item.fileName
+                if (fid.isNotBlank()) {
+                    existingAssetsMap[fid] = fname
+                }
+            }
+
+            // 写入 assets（对象数组）与 digitalAssets（仅 fileId 列表）两套键，保证前后兼容
+            val assetsArr = org.json.JSONArray()
+            val digitalAssetsArr = org.json.JSONArray()
+            existingAssetsMap.forEach { (fid, fname) ->
+                val obj = org.json.JSONObject()
+                obj.put("fileId", fid)
+                obj.put("fileName", fname)
+                assetsArr.put(obj)
+                digitalAssetsArr.put(fid)
+            }
+            metaObj.put("assets", assetsArr)
+            metaObj.put("digitalAssets", digitalAssetsArr)
+
+            metaFile.writeText(metaObj.toString())
+            android.util.Log.d(
+                "EventRepository",
+                "meta.json updated: photoFiles=${existingPhotos.size}, audioFiles=${existingAudios.size}, assets=${existingAssetsMap.size}"
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("EventRepository", "Failed to update meta.json for assets: ${e.message}")
+        }
+    }
+
+    /**
      * Fix legacy filenames that used placeholder extension "$ext" produced by early versions.
      * This function renames affected audio files to use ".m4a" extension and updates meta.json accordingly.
      * Photos are kept unchanged unless a similar issue is later reported.
      * This is a safe, idempotent operation and will only run for the current event directory before zipping.
      */
-    private fun fixLegacyPlaceholderExtensions(eventDir: File) {
+    private fun fixLegacyPlaceholderExtensions(
+        eventDir: File,
+        structuralDefectDetails: String?,
+        defectNosFromDb: List<String>? = null,
+        defectUidsFromDb: List<String>? = null
+    ) {
         val metaFile = File(eventDir, "meta.json")
         if (!metaFile.exists()) return
         try {
             val obj = JSONObject(metaFile.readText())
+            var changed = false
             val audios = obj.optJSONArray("audios")
             if (audios != null) {
                 val updated = mutableListOf<String>()
@@ -382,37 +606,113 @@ class EventRepository @Inject constructor(
                     if (name.endsWith(".\$ext")) { // matches literal ".$ext"
                         val oldFile = File(eventDir, name)
                         val base = name.removeSuffix(".\$ext")
-                        // Default audio extension is m4a according to recorder settings
-                        var newName = "$base.m4a"
-                        var newFile = File(eventDir, newName)
-                        // Avoid overwrite: if exists, append a numeric suffix
-                        var attempt = 1
-                        while (newFile.exists()) {
-                            newName = "${base}_$attempt.m4a"
-                            newFile = File(eventDir, newName)
-                            attempt += 1
-                        }
-                        // Rename if the old file exists
+                        val canonicalName = "$base.m4a"
+                        val canonicalFile = File(eventDir, canonicalName)
+                        var finalName = canonicalName
+
                         if (oldFile.exists()) {
                             try {
-                                if (!oldFile.renameTo(newFile)) {
-                                    // Fallback: copy+delete
-                                    FileInputStream(oldFile).channel.use { inCh ->
-                                        FileOutputStream(newFile).channel.use { outCh ->
-                                            inCh.transferTo(0, inCh.size(), outCh)
+                                if (canonicalFile.exists()) {
+                                    // 若已有规范文件，比较大小；相同则删除占位，否则保留占位为重复（附加后缀）
+                                    if (oldFile.length() == canonicalFile.length()) {
+                                        try { oldFile.delete() } catch (_: Exception) {}
+                                        finalName = canonicalName
+                                    } else {
+                                        var attempt = 1
+                                        var altName: String
+                                        var altFile: File
+                                        do {
+                                            altName = "${base}_$attempt.m4a"
+                                            altFile = File(eventDir, altName)
+                                            attempt += 1
+                                        } while (altFile.exists())
+                                        // 使用复制+删除，避免 rename 在部分设备失败
+                                        FileInputStream(oldFile).channel.use { inCh ->
+                                            FileOutputStream(altFile).channel.use { outCh ->
+                                                inCh.transferTo(0, inCh.size(), outCh)
+                                            }
                                         }
+                                        try { oldFile.delete() } catch (_: Exception) {}
+                                        finalName = altName
                                     }
-                                    try { oldFile.delete() } catch (_: Exception) {}
+                                } else {
+                                    // 直接重命名为规范名
+                                    if (!oldFile.renameTo(canonicalFile)) {
+                                        FileInputStream(oldFile).channel.use { inCh ->
+                                            FileOutputStream(canonicalFile).channel.use { outCh ->
+                                                inCh.transferTo(0, inCh.size(), outCh)
+                                            }
+                                        }
+                                        try { oldFile.delete() } catch (_: Exception) {}
+                                    }
+                                    finalName = canonicalName
                                 }
                             } catch (_: Exception) {}
                         }
-                        updated.add(newName)
+                        updated.add(finalName)
                     } else {
                         updated.add(name)
                     }
                 }
                 // Write back updated audios list
                 obj.put("audios", org.json.JSONArray(updated))
+                changed = true
+            }
+
+            // Ensure structuralDefectDetails exists in meta.json when available in DB
+            val existingStructAny = obj.opt("structuralDefectDetails")
+            val isMissingOrEmpty = when (existingStructAny) {
+                null -> true
+                is org.json.JSONObject -> false
+                is String -> existingStructAny.isBlank()
+                else -> false
+            }
+            if (isMissingOrEmpty && !structuralDefectDetails.isNullOrBlank()) {
+                try {
+                    val structObj = org.json.JSONObject(structuralDefectDetails)
+                    obj.put("structuralDefectDetails", structObj)
+                } catch (_: Exception) {
+                    // 如果解析失败，写入空对象确保类型为对象
+                    obj.put("structuralDefectDetails", org.json.JSONObject())
+                }
+                changed = true
+            }
+
+            // Ensure defectNos populated from DB when meta.json missing or empty
+            run {
+                try {
+                    val arr = obj.optJSONArray("defectNos")
+                    val isEmptyInMeta = (arr == null || arr.length() == 0)
+                    val hasDbNos = !defectNosFromDb.isNullOrEmpty()
+                    if (isEmptyInMeta && hasDbNos) {
+                        val jsonArr = org.json.JSONArray()
+                        defectNosFromDb!!.forEach { jsonArr.put(it) }
+                        obj.put("defectNos", jsonArr)
+                        changed = true
+                    }
+                } catch (_: Exception) {
+                    // noop
+                }
+            }
+
+            // Ensure defectUids populated from DB when meta.json missing or empty
+            run {
+                try {
+                    val arr = obj.optJSONArray("defectUids")
+                    val isEmptyInMeta = (arr == null || arr.length() == 0)
+                    val hasDbUids = !defectUidsFromDb.isNullOrEmpty()
+                    if (isEmptyInMeta && hasDbUids) {
+                        val jsonArr = org.json.JSONArray()
+                        defectUidsFromDb!!.forEach { jsonArr.put(it) }
+                        obj.put("defectUids", jsonArr)
+                        changed = true
+                    }
+                } catch (_: Exception) {
+                    // noop
+                }
+            }
+
+            if (changed) {
                 metaFile.writeText(obj.toString())
             }
         } catch (_: Exception) {
