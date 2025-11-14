@@ -30,6 +30,8 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["project_id"]),
         Index(value = ["project_uid"]),
+        // 新增复合索引：按项目与同步状态联合过滤，匹配数据库迁移创建的索引
+        Index(value = ["project_uid", "is_synced"], name = "index_event_project_uid_is_synced"),
         Index(value = ["uid"], unique = true)
     ]
 )
@@ -68,6 +70,8 @@ data class EventEntity(
     @ColumnInfo(name = "audio_files") val audioFiles: List<String> = emptyList(),
     /** Draft flag to indicate the event is not finalized and created via real-time autosave. */
     @ColumnInfo(name = "is_draft") val isDraft: Boolean = true,
+    /** Sync flag to indicate whether this event has been uploaded to cloud successfully. */
+    @ColumnInfo(name = "is_synced") val isSynced: Boolean = false,
     /** Structural Defect Details data as JSON string containing all SDD form fields. */
     @ColumnInfo(name = "structural_defect_details") val structuralDefectDetails: String? = null
 )

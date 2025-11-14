@@ -121,7 +121,7 @@ class StoragePickerViewModel @Inject constructor(
      * @param node 要进入的文件夹节点
      */
     fun enterFolder(node: DigitalAssetTreeNode) {
-        if (node.treeNodeType == "Folder") {
+        if (isFolderType(node.treeNodeType)) {
             val currentPath = _uiState.value.currentPath.toMutableList()
             currentPath.add(node)
             
@@ -181,7 +181,7 @@ class StoragePickerViewModel @Inject constructor(
      * @param item 要切换选中状态的项目
      */
     fun toggleItemSelection(item: DigitalAssetTreeNode) {
-        if (item.treeNodeType == "Folder") return // 文件夹不能被选中
+        if (isFolderType(item.treeNodeType)) return // 文件夹（含Setting）不能被选中
         
         val currentSelected = _uiState.value.selectedItems.toMutableSet()
         if (currentSelected.contains(item.id)) {
@@ -198,6 +198,24 @@ class StoragePickerViewModel @Inject constructor(
      */
     fun clearSelection() {
         _uiState.value = _uiState.value.copy(selectedItems = emptySet())
+    }
+
+    /**
+     * 根据节点ID列表设置选中状态（用于精确回显）
+     *
+     * @param nodeIds 要选中的资产节点ID列表
+     */
+    fun setSelectedAssetsByNodeIds(nodeIds: List<String>) {
+        // 直接将节点ID集合设置为选中项；节点ID在树中是唯一的
+        val selectedIds = nodeIds.filter { it.isNotBlank() }.toSet()
+        _uiState.value = _uiState.value.copy(
+            selectedItems = selectedIds,
+            isMultiSelectMode = selectedIds.isNotEmpty()
+        )
+        android.util.Log.d(
+            "StoragePickerViewModel",
+            "根据节点ID回显选中资产: ${selectedIds.joinToString()}"
+        )
     }
 
     /**
@@ -279,7 +297,7 @@ class StoragePickerViewModel @Inject constructor(
         
         // 根据fileId找到对应的节点ID
         val selectedIds = allItems
-            .filter { it.treeNodeType != "Folder" && it.fileId != null && assetFileIds.contains(it.fileId) }
+            .filter { !isFolderType(it.treeNodeType) && it.fileId != null && assetFileIds.contains(it.fileId) }
             .map { 
                 android.util.Log.d("StoragePickerViewModel", "匹配到节点: id=${it.id}, name=${it.name}, fileId=${it.fileId}")
                 it.id 
@@ -289,7 +307,7 @@ class StoragePickerViewModel @Inject constructor(
         android.util.Log.d("StoragePickerViewModel", "根据fileId找到${selectedIds.size}个匹配项: ${selectedIds.joinToString()}")
         
         // 同时记录所有非文件夹节点的信息用于调试
-        val allNonFolderItems = allItems.filter { it.treeNodeType != "Folder" }
+        val allNonFolderItems = allItems.filter { !isFolderType(it.treeNodeType) }
         android.util.Log.d("StoragePickerViewModel", "所有非文件夹节点(${allNonFolderItems.size}个):")
         allNonFolderItems.forEach { item ->
             android.util.Log.d("StoragePickerViewModel", "  - id=${item.id}, name=${item.name}, fileId=${item.fileId}, type=${item.treeNodeType}")
@@ -430,7 +448,7 @@ class StoragePickerViewModel @Inject constructor(
                 if (digitalAsset != null) {
                     // 使用数据库中的type信息，如果存在的话
                     val dbType = digitalAsset.type
-                    if (!dbType.isNullOrEmpty() && dbType != "Folder") {
+                    if (!dbType.isNullOrEmpty() && !isFolderType(dbType)) {
                         treeNodeType = dbType
                         android.util.Log.d("StoragePickerViewModel", "Updated type for file_id $fileIdValue: $dbType")
                     }
@@ -462,6 +480,17 @@ class StoragePickerViewModel @Inject constructor(
             children = children,
             fileId = fileIdValue
         )
+    }
+
+    /**
+     * Helper: determine whether a node type should be treated as a folder.
+     * "Folder" and "Setting" are both folder-like, and should not be selectable.
+     *
+     * @param type Node type string
+     * @return true if folder-like; otherwise false
+     */
+    private fun isFolderType(type: String?): Boolean {
+        return type.equals("Folder", ignoreCase = true) || type.equals("Setting", ignoreCase = true)
     }
 
     /**

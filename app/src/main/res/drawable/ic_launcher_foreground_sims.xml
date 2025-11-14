@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  File: ic_launcher_foreground_sims.xml
+  Description: Vector foreground for SIMS app icon. Approximates provided logo with
+               a tilted diamond and magnifier/check glyph in SIMS blue.
+  Author: SIMS Team
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!--
+      Function: Background guide (invisible)
+      Purpose: Keep viewport centered for icon composition.
+      Returns: N/A
+    -->
+    <!-- Scale down and center to fit safe area (~0.72 scale, ~15px offset) -->
+    <group android:name="center" android:scaleX="0.72" android:scaleY="0.72" android:translateX="15" android:translateY="15">
+        <!-- Outer tilted diamond (rotated square) -->
+        <!-- Path draws a diamond centered at (54,54) -->
+        <path
+            android:fillColor="#184B8D"
+            android:pathData="M54,12 L96,54 L54,96 L12,54 Z" />
+
+        <!-- Inner stroke to soften edges -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2"
+            android:fillColor="@android:color/transparent"
+            android:pathData="M54,16 L92,54 L54,92 L16,54 Z" />
+
+        <!-- Magnifier circle overlapping bottom-left of diamond -->
+        <path
+            android:fillColor="#184B8D"
+            android:pathData="M36,68a16,16 0 1,0 32,0a16,16 0 1,0 -32,0" />
+
+        <!-- Magnifier handle -->
+        <path
+            android:strokeColor="#184B8D"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:fillColor="@android:color/transparent"
+            android:pathData="M62,86 L74,98" />
+
+        <!-- Check mark inside magnifier -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="6"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:fillColor="@android:color/transparent"
+            android:pathData="M44,70 L50,76 L60,64" />
+
+        <!-- Optional SIMS bar placeholder (top accent) -->
+        <path
+            android:fillColor="#184B8D"
+            android:pathData="M38,28 H70 A6,6 0 0,1 76,34 V40 H32 V34 A6,6 0 0,1 38,28 Z" />
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2"
+            android:fillColor="@android:color/transparent"
+            android:pathData="M34,40 H74" />
+    </group>
+</vector>

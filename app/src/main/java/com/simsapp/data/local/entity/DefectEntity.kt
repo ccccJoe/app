@@ -53,5 +53,7 @@ data class DefectEntity(
     /** Image file paths as JSON string list via TypeConverters. */
     @ColumnInfo(name = "images") val images: List<String> = emptyList(),
     /** Count of related events for quick listing. */
-    @ColumnInfo(name = "event_count") val eventCount: Int = 0
+    @ColumnInfo(name = "event_count") val eventCount: Int = 0,
+    /** Sort order within the project; 0 by default, smaller comes first. */
+    @ColumnInfo(name = "sort_order", defaultValue = "0") val sortOrder: Int = 0
 )

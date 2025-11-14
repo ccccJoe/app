@@ -1,6 +1,6 @@
 /*
  * File: DigitalAssetCategorizedDisplay.kt
- * Description: Compose component for displaying digital assets categorized by type with preview functionality.
+ * Description: Compose component for displaying digital assets categorized by type with preview and delete functionality.
  * Author: SIMS Team
  */
 package com.simsapp.ui.event.components
@@ -34,12 +34,28 @@ import com.example.sims_android.ui.event.DigitalAssetDetail
  * 
  * @param assets 数字资产详细信息列表
  * @param onAssetClick 资产点击回调，传递资产信息用于预览
+ * @param onAssetDelete 资产删除回调，传递资产信息用于移除当前选择
  * @param modifier 修饰符
  */
 @Composable
+/**
+ * DigitalAssetCategorizedDisplay
+ *
+ * 数字资产分类显示组件，根据资产类型分组显示，并支持预览功能。
+ * 新增 `showDeleteIcon` 参数以控制删除按钮的可见性，默认显示，
+ * 以保证其他页面（如事件编辑/创建页）的行为不受影响。
+ *
+ * @param assets 数字资产详细信息列表
+ * @param onAssetClick 资产点击回调，传递资产信息用于预览
+ * @param onAssetDelete 资产删除回调，传递资产信息用于移除当前选择
+ * @param showDeleteIcon 是否显示删除按钮（默认 true）
+ * @param modifier 修饰符
+ */
 fun DigitalAssetCategorizedDisplay(
     assets: List<DigitalAssetDetail>,
     onAssetClick: (DigitalAssetDetail) -> Unit = {},
+    onAssetDelete: (DigitalAssetDetail) -> Unit = {},
+    showDeleteIcon: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     if (assets.isEmpty()) {
@@ -57,42 +73,27 @@ fun DigitalAssetCategorizedDisplay(
         assets.groupBy { it.type }.toSortedMap()
     }
 
-    Card(
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        modifier = modifier
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Text(
-                text = "Database Files",
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 16.sp,
-                color = Color(0xFF333333)
-            )
-            HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
-            
-            if (categorizedAssets.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                
-                // 按类型分组显示
-                categorizedAssets.forEach { (type, assets) ->
-                    AssetCategorySection(
-                        categoryType = type,
-                        assets = assets,
-                        onAssetClick = onAssetClick,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
-            } else {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "No files selected",
-                    fontSize = 13.sp,
-                    color = Color(0xFF90A4AE)
+    // 去除内部卡片样式与“Database Files”标题，直接按照分类展示
+    Column(modifier = modifier.fillMaxWidth().padding(12.dp)) {
+        if (categorizedAssets.isNotEmpty()) {
+            // 按类型分组显示
+            categorizedAssets.forEach { (type, assets) ->
+                AssetCategorySection(
+                    categoryType = type,
+                    assets = assets,
+                    onAssetClick = onAssetClick,
+                    onAssetDelete = onAssetDelete,
+                    showDeleteIcon = showDeleteIcon,
+                    modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(12.dp))
             }
+        } else {
+            Text(
+                text = "No files selected",
+                fontSize = 13.sp,
+                color = Color(0xFF90A4AE)
+            )
         }
     }
 }
@@ -103,10 +104,22 @@ fun DigitalAssetCategorizedDisplay(
  * 单个资产类别的显示区域
  */
 @Composable
+/**
+ * AssetCategorySection
+ *
+ * Displays one asset category section with list items.
+ *
+ * @param categoryType Category identifier string
+ * @param assets Assets under this category
+ * @param onAssetClick Preview callback
+ * @param onAssetDelete Delete callback
+ */
 private fun AssetCategorySection(
     categoryType: String,
     assets: List<DigitalAssetDetail>,
     onAssetClick: (DigitalAssetDetail) -> Unit,
+    onAssetDelete: (DigitalAssetDetail) -> Unit,
+    showDeleteIcon: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -149,7 +162,9 @@ private fun AssetCategorySection(
                     items(assets) { asset ->
                         ImageAssetItem(
                             asset = asset,
-                            onClick = { onAssetClick(asset) }
+                            onClick = { onAssetClick(asset) },
+                            onDelete = { onAssetDelete(asset) },
+                            showDeleteIcon = showDeleteIcon
                         )
                     }
                 }
@@ -164,7 +179,9 @@ private fun AssetCategorySection(
                         AssetListItem(
                             asset = asset,
                             categoryType = categoryType,
-                            onClick = { onAssetClick(asset) }
+                            onClick = { onAssetClick(asset) },
+                            onDelete = { onAssetDelete(asset) },
+                            showDeleteIcon = showDeleteIcon
                         )
                     }
                 }
@@ -179,9 +196,20 @@ private fun AssetCategorySection(
  * 图片资产项的缩略图显示
  */
 @Composable
+/**
+ * ImageAssetItem
+ *
+ * Thumbnail item for image asset with preview and delete overlay.
+ *
+ * @param asset Digital asset
+ * @param onClick Preview handler
+ * @param onDelete Delete handler
+ */
 private fun ImageAssetItem(
     asset: DigitalAssetDetail,
     onClick: () -> Unit,
+    onDelete: () -> Unit,
+    showDeleteIcon: Boolean,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -198,6 +226,28 @@ private fun ImageAssetItem(
             tint = Color(0xFF42A5F5),
             modifier = Modifier.size(24.dp)
         )
+
+        // Delete overlay button (top-right corner), controlled by flag
+        if (showDeleteIcon) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+            ) {
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(20.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Delete",
+                        tint = Color(0xFF90A4AE),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -207,25 +257,34 @@ private fun ImageAssetItem(
  * 资产列表项显示
  */
 @Composable
+/**
+ * AssetListItem
+ *
+ * List item for non-image assets with preview and delete icons.
+ *
+ * @param asset Digital asset
+ * @param categoryType Asset category string
+ * @param onClick Preview handler
+ * @param onDelete Delete handler
+ */
 private fun AssetListItem(
     asset: DigitalAssetDetail,
     categoryType: String,
     onClick: () -> Unit,
+    onDelete: () -> Unit,
+    showDeleteIcon: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val canPreview = categoryType.uppercase() != "RISK_MATRIX"
+    // 风险矩阵也允许点击以触发预览弹窗（参考新建事件页面）
+    val canPreview = true
     
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(if (canPreview) Color(0xFFF8F9FA) else Color(0xFFF0F0F0))
-            .clickable(enabled = canPreview) { 
-                if (canPreview) {
-                    onClick() 
-                }
-            }
+            .background(Color(0xFFF8F9FA))
+            .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Icon(
@@ -238,27 +297,32 @@ private fun AssetListItem(
         Text(
             text = asset.fileName,
             fontSize = 13.sp,
-            color = if (canPreview) Color(0xFF37474F) else Color(0xFF90A4AE),
+            color = Color(0xFF37474F),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
         
-        // 根据是否可预览显示不同图标
-        if (canPreview) {
-            Icon(
-                imageVector = Icons.Default.Visibility,
-                contentDescription = "Preview",
-                tint = Color(0xFF90A4AE),
-                modifier = Modifier.size(16.dp)
-            )
-        } else {
-            Icon(
-                imageVector = Icons.Default.Block,
-                contentDescription = "Cannot preview",
-                tint = Color(0xFF90A4AE),
-                modifier = Modifier.size(16.dp)
-            )
+        // Preview icon
+        Icon(
+            imageVector = Icons.Default.Visibility,
+            contentDescription = "Preview",
+            tint = Color(0xFF90A4AE),
+            modifier = Modifier.size(16.dp)
+        )
+
+        Spacer(Modifier.width(8.dp))
+
+        // Delete icon (close), controlled by flag
+        if (showDeleteIcon) {
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Delete",
+                    tint = Color(0xFF90A4AE),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }

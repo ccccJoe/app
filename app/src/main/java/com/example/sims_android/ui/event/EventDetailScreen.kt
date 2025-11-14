@@ -3,6 +3,7 @@ package com.simsapp.ui.event
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -28,13 +29,11 @@ fun EventDetailScreen(
     val title = remember(projectName) { if (projectName.isNotBlank()) "New Event - $projectName" else "New Event" }
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(title) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
+            com.simsapp.ui.common.AppTopBar(
+                title = title,
+                onBack = onBack,
+                containerColor = Color.White,
+                titleColor = Color(0xFF1C1C1E)
             )
         }
     ) { padding ->

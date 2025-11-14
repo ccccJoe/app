@@ -160,7 +160,7 @@ fun PublicKeyDialog(
                             .fillMaxWidth()
                             .height(48.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF4A90E2)
+                            containerColor = Color(0xFF153E75)
                         ),
                         shape = RoundedCornerShape(8.dp)
                     ) {

@@ -47,6 +47,10 @@ interface EventDao {
     /** Get all events for a project by project_uid. */
     @Query("SELECT * FROM event WHERE project_uid = :projectUid ORDER BY last_edit_time DESC")
     fun getByProjectUid(projectUid: String): Flow<List<EventEntity>>
+
+    /** Get unsynced events for a project by project_uid. */
+    @Query("SELECT * FROM event WHERE project_uid = :projectUid AND is_synced = 0 ORDER BY last_edit_time DESC")
+    fun getUnsyncedByProjectUid(projectUid: String): Flow<List<EventEntity>>
     
     /** Get events that reference a specific defect by defect_id. */
     @Query("SELECT * FROM event WHERE defect_ids LIKE '%' || :defectId || '%' ORDER BY last_edit_time DESC")
@@ -71,8 +75,24 @@ interface EventDao {
     /** Get event by UID (using actual uid field). */
     @Query("SELECT * FROM event WHERE uid = :uid LIMIT 1")
     suspend fun getByUid(uid: String): EventEntity?
+
+    /** Mark single event as synced by UID. */
+    @Query("UPDATE event SET is_synced = 1 WHERE uid = :uid")
+    suspend fun markSyncedByUid(uid: String)
+
+    /** Mark multiple events as synced by UIDs. */
+    @Query("UPDATE event SET is_synced = 1 WHERE uid IN (:uids)")
+    suspend fun markSyncedByUids(uids: List<String>)
     
     /** Get all events (for migration purposes). */
     @Query("SELECT * FROM event ORDER BY last_edit_time DESC")
     suspend fun getAllEvents(): List<EventEntity>
+
+    /**
+     * 统计未关联任何缺陷的事件数量。
+     * 条件：defect_uids 为 NULL 或 JSON 空数组 '[]'。
+     * 返回响应式 Flow 便于 UI 观察。
+     */
+    @Query("SELECT COUNT(*) FROM event WHERE defect_uids IS NULL OR defect_uids = '[]'")
+    fun countUnlinkedEvents(): Flow<Int>
 }

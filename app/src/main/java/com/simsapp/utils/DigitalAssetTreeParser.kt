@@ -2,6 +2,8 @@
  * File: DigitalAssetTreeParser.kt
  * Description: Utility class for parsing and traversing project_digital_asset_tree structure.
  * Author: SIMS Team
+ * Change Log:
+ *  - 2025-11-06: Treat 'Setting' nodes as folder-like (same as 'Folder').
  */
 package com.simsapp.utils
 
@@ -93,7 +95,7 @@ object DigitalAssetTreeParser {
 
     /**
      * Recursively traverse a tree node and collect nodes with file_id.
-     * Skips nodes with tree_node_type="Folder" and nodes with null/empty file_id.
+     * Skips nodes with folder-like types ("Folder" or "Setting") and nodes with null/empty file_id.
      *
      * @param node Current JSON node (JSONObject or JSONArray)
      * @param currentPath Current path in the tree structure
@@ -108,10 +110,10 @@ object DigitalAssetTreeParser {
     ) {
         when (node) {
             is JSONObject -> {
-                // Skip nodes with tree_node_type="Folder"
+                // Skip nodes with folder-like types (Folder or Setting)
                 val nodeType = node.optString("tree_node_type")
-                if (nodeType.equals("Folder", ignoreCase = true)) {
-                    android.util.Log.d("DigitalAssetParser", "Skipping Folder node at path: $currentPath")
+                if (isFolderType(nodeType)) {
+                    android.util.Log.d("DigitalAssetParser", "Skipping folder-like node (type=$nodeType) at path: $currentPath")
                     // Still traverse children of folder nodes
                     traverseChildren(node, currentPath, assetNodes, position)
                     return
@@ -255,5 +257,16 @@ object DigitalAssetTreeParser {
         }
 
         return null
+    }
+
+    /**
+     * Helper: Determine whether the node type should be treated as a folder.
+     * "Folder" and "Setting" are both considered folder-like and should not be selectable assets.
+     *
+     * @param type Node type string from JSON
+     * @return true if the type is folder-like, false otherwise
+     */
+    private fun isFolderType(type: String?): Boolean {
+        return type.equals("Folder", ignoreCase = true) || type.equals("Setting", ignoreCase = true)
     }
 }

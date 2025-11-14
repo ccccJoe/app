@@ -17,6 +17,7 @@ import androidx.room.PrimaryKey
  * This entity stores basic project attributes and counters.
  * Added field: project_uid for binding remote unique identifier and caching project detail.
  * Added field: project_hash for incremental sync optimization.
+ * Added field: ralation_time to cache relation time from project_list API.
  */
 @Entity(
     tableName = "project",
@@ -36,6 +37,8 @@ data class ProjectEntity(
     @ColumnInfo(name = "project_hash", defaultValue = "") val projectHash: String = "",
     /** Project end date in epoch millis, null if not set. */
     @ColumnInfo(name = "end_date") val endDate: Long? = null,
+    /** Cached relation time from project_list API (epoch millis if available). */
+    @ColumnInfo(name = "ralation_time") val ralationTime: Long? = null,
     /** Current status string (e.g., ACTIVE, PAUSED, CLOSED). */
     @ColumnInfo(name = "status") val status: String = "ACTIVE",
     /** Count of related defects for quick dashboard access. */

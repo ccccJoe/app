@@ -25,7 +25,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -39,6 +39,9 @@ android {
             )
             // Release 不注入敏感信息
             buildConfigField("String", "DEV_AUTH_TOKEN", "\"\"")
+            // 为 UAT/开发场景提供可安装的签名：使用调试签名（debug keystore）
+            // 注意：仅用于联调与内测，不应用于正式发版
+            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             // 仅调试构建注入本地令牌（来自 local.properties）
@@ -63,6 +66,54 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // Lint 配置：UAT/Release 构建不因 lint 错误失败，且避免触发 Lint Vital Analyze 的 OOM
+    lint {
+        // 关闭 release 构建的 lint 检查（会跳过 lintVital* 任务）
+        checkReleaseBuilds = false
+        // 即使存在 lint 问题也不终止构建
+        abortOnError = false
+    }
+
+    /**
+     * 文件级注释：为并存安装添加产品风味。
+     * 作者：SIMS Android 团队
+     * 说明：新增 uat 风味，使用不同的 applicationId 与应用名，支持与正式版并行安装。
+     */
+    // 定义风味维度
+    flavorDimensions += "env"
+    // 定义产品风味：prod（默认正式版）、uat（联调/UAT）
+    productFlavors {
+        create("prod") {
+            dimension = "env"
+            // 使用 defaultConfig 的 applicationId 与默认资源即可
+            // 注入正式环境 BASE_URL 到 BuildConfig，用于 DI 中的 Retrofit
+            buildConfigField("String", "BASE_URL", "\"https://sims.ink-stone.win/zuul/sims-master/\"")
+            // 覆盖应用名称（桌面显示），Manifest 使用 @string/app_name
+            resValue("string", "app_name", "SIMS")
+        }
+        create("uat") {
+            dimension = "env"
+            // 通过后缀生成唯一包名，避免与正式版冲突
+            applicationIdSuffix = ".uat"
+            // 版本名添加后缀，便于识别
+            versionNameSuffix = "-uat"
+            // 覆盖应用名称（桌面显示），Manifest 使用 @string/app_name
+            resValue("string", "app_name", "SIMS-uat")
+            // 注入 UAT 环境 BASE_URL 到 BuildConfig，用于 DI 中的 Retrofit
+            buildConfigField("String", "BASE_URL", "\"https://sims-uat.ink-stone.win/zuul/sims-master/\"")
+        }
+        // 新增 dev 风味：用于开发联调
+        create("dev") {
+            dimension = "env"
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            // 覆盖应用名称（桌面显示），Manifest 使用 @string/app_name
+            resValue("string", "app_name", "SIMS-dev")
+            // 注入 DEV 环境 BASE_URL；如需调整，可在后续共识文档中更新
+            buildConfigField("String", "BASE_URL", "\"https://sims.ink-stone.win/zuul/sims-master/\"")
+        }
     }
 }
 

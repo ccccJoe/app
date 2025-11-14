@@ -16,9 +16,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -66,6 +68,9 @@ class ProjectDetailViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
+    // 记住当前页面的 projectUid，便于持久化排序时使用
+    private var currentProjectUid: String? = null
+
     // ---------------- Historical Defects State ----------------
     /**
      * Backing state for historical defects, parsed from cached project detail JSON.
@@ -93,19 +98,44 @@ class ProjectDetailViewModel @Inject constructor(
     val projectDescription: StateFlow<String> = _projectDescription
 
     /**
+     * 数据类：批量事件同步进度。
+     * 描述：用于 UI 展示“已完成/总共”的整体进度和运行状态。
+     * - completed: 已成功上传到 OSS 的事件数量
+     * - total: 参与同步的事件总数（有效打包后的数量）
+     * - running: 是否处于同步进行中
+     */
+    data class SyncProgress(val completed: Int, val total: Int, val running: Boolean)
+
+    /**
+     * 事件同步进度状态流（只读暴露给 UI）。
+     * 说明：uploadSelectedEvents 调用期间会实时更新该值。
+     */
+    private val _eventSyncProgress = MutableStateFlow(SyncProgress(0, 0, false))
+    val eventSyncProgress: StateFlow<SyncProgress> = _eventSyncProgress
+
+    /**
      * 主动加载一次：按 projectUid 拉取 Room 中的 ProjectDetail.rawJson 并解析，再读取本地图片目录。
      */
     fun loadDefectsByProjectUid(projectUid: String?) {
         if (projectUid.isNullOrBlank()) return
+        currentProjectUid = projectUid
         viewModelScope.launch(Dispatchers.IO) {
-            val result = runCatching {
+            val result = try {
                 val detail = projectDetailDao.getByProjectUid(projectUid)
                 val raw = detail?.rawJson.orEmpty()
                 // Parse project description
                 val description = parseProjectDescription(raw)
                 _projectDescription.value = description
-                parseHistoryDefects(projectUid, raw)
-            }.getOrElse { emptyList() }
+                // 先解析历史缺陷
+                val parsed = parseHistoryDefects(projectUid, raw)
+                // 为避免页面初次进入时的排序闪烁，按数据库的 sort_order 进行初始排序
+                val defects = defectRepository.getDefectsByProjectUid(projectUid).first()
+                val position = defects.mapIndexed { index, d -> d.defectNo to index }.toMap()
+                parsed.sortedBy { position[it.no] ?: Int.MAX_VALUE }
+            } catch (e: Exception) {
+                Log.e("ProjectDetailViewModel", "Failed to load defects for project $projectUid: ${e.message}", e)
+                emptyList()
+            }
             _historyDefects.value = result
         }
         // 订阅这条 detail 的变化（例如：同步完成后图片下载落地 -> 仓库更新 lastFetchedAt）
@@ -121,8 +151,8 @@ class ProjectDetailViewModel @Inject constructor(
         if (projectUid.isNullOrBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 订阅该项目的所有 event 记录
-                eventRepository.getEventsByProjectUid(projectUid).collect { eventEntities ->
+                // 订阅该项目的未同步 event 记录
+                eventRepository.getUnsyncedEventsByProjectUid(projectUid).collect { eventEntities ->
                     val eventItems = eventEntities.map { entity ->
                         EventItem(
                             id = entity.eventId.toString(), // 使用eventId作为主键标识，用于数据库查询
@@ -134,6 +164,8 @@ class ProjectDetailViewModel @Inject constructor(
                             defectNo = entity.defectNos.joinToString(", "),
                             date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
                                 .format(java.util.Date(entity.lastEditTime))
+                            ,
+                            riskRating = entity.riskLevel
                         )
                     }
                     _events.value = eventItems
@@ -144,6 +176,14 @@ class ProjectDetailViewModel @Inject constructor(
             }
         }
     }
+
+    /**
+     * 函数：获取非完成状态项目列表 Flow
+     * 说明：用于在项目详情页事件列表下的同步入口弹出项目选择底部弹窗。
+     * 返回：Flow<List<ProjectEntity>>
+     */
+    fun getNotFinishedProjects(): Flow<List<com.simsapp.data.local.entity.ProjectEntity>> =
+        projectDao.getNotFinishedProjects()
 
     // 注意：重复的 observeDetailAndRefresh 已合并至文件底部的统一实现（同时刷新缺陷与分组）。
 
@@ -228,6 +268,8 @@ class ProjectDetailViewModel @Inject constructor(
      * @return Pair<Boolean, String> 成功标志和消息
      */
     suspend fun uploadSelectedEvents(context: Context, eventUids: List<String>, projectUid: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        // 初始化：根据选择的数量设置总数（后续以有效打包数为准），标记为进行中
+        _eventSyncProgress.value = SyncProgress(completed = 0, total = eventUids.size, running = true)
         // 首先执行事件目录迁移，确保所有事件都有对应的目录结构
         val migrationUtil = EventDirectoryMigrationUtil(eventDao, gson)
         val migrationResult = migrationUtil.migrateEventDirectories(context)
@@ -272,6 +314,18 @@ class ProjectDetailViewModel @Inject constructor(
                     results += "event=$uid | FAIL | Directory not found: ${eventDir.absolutePath}"
                     continue
                 }
+
+                // 在打包前覆盖 meta.json 的目标项目UID，并写入数据库风险与核心字段
+                run {
+                    val (okProj, msgProj) = eventRepository.overrideMetaProjectUid(appContext, uid, projectUid)
+                    android.util.Log.d("ProjectDetailViewModel", "overrideMetaProjectUid($uid) -> $okProj | $msgProj")
+
+                    val (okRisk, msgRisk) = eventRepository.updateMetaRiskFromDb(appContext, uid)
+                    android.util.Log.d("ProjectDetailViewModel", "updateMetaRiskFromDb($uid) -> $okRisk | $msgRisk")
+
+                    val (okCore, msgCore) = eventRepository.updateMetaCoreFromDb(appContext, uid)
+                    android.util.Log.d("ProjectDetailViewModel", "updateMetaCoreFromDb($uid) -> $okCore | $msgCore")
+                }
                 
                 val zipResult = eventRepository.createEventZip(context, uid)
                 if (!zipResult.first) {
@@ -294,8 +348,12 @@ class ProjectDetailViewModel @Inject constructor(
             
             if (eventPackages.isEmpty()) {
                 android.util.Log.e("ProjectDetailViewModel", "No valid event packages created")
+                // 无可用包，结束并清空进度
+                _eventSyncProgress.value = SyncProgress(completed = 0, total = 0, running = false)
                 return@withContext false to "No valid event packages created"
             }
+            // 更新总数为有效打包后的数量，保持进行中
+            _eventSyncProgress.value = SyncProgress(completed = 0, total = eventPackages.size, running = true)
             
             android.util.Log.d("ProjectDetailViewModel", "Step 2: Calling create_event_upload API with ${eventPackages.size} packages")
             
@@ -334,6 +392,7 @@ class ProjectDetailViewModel @Inject constructor(
             
             // Step 4: 根据返回的data列表，匹配hash并上传对应的压缩包
             var uploadSuccessCount = 0
+            val successfulEventUids = mutableListOf<String>()
             
             android.util.Log.d("ProjectDetailViewModel", "Hash matching verification:")
             android.util.Log.d("ProjectDetailViewModel", "Local packages count: ${eventPackages.size}")
@@ -378,7 +437,10 @@ class ProjectDetailViewModel @Inject constructor(
                     
                     if (uploadResult.first) {
                         uploadSuccessCount++
+                        successfulEventUids.add(matchingPackage.eventUid)
                         results += "event=${matchingPackage.eventUid} | SUCCESS | Uploaded to OSS"
+                        // 上传成功后更新“已完成”数量
+                        _eventSyncProgress.value = _eventSyncProgress.value.copy(completed = uploadSuccessCount)
                     } else {
                         android.util.Log.e("ProjectDetailViewModel", "OSS upload failed for ${matchingPackage.eventUid}: ${uploadResult.second}")
                         results += "event=${matchingPackage.eventUid} | FAIL | Upload to OSS failed: ${uploadResult.second}"
@@ -407,6 +469,16 @@ class ProjectDetailViewModel @Inject constructor(
                     if (statusResult.first) { // 请求成功
                         if (statusResult.second) { // 任务完成
                             results += "POLLING | SUCCESS | All events synced to cloud"
+                            // 标记进度完成
+                            _eventSyncProgress.value = _eventSyncProgress.value.copy(running = false)
+                            // 批量成功后将所有成功上传的事件标记为已同步
+                            if (successfulEventUids.isNotEmpty()) {
+                                try {
+                                    eventRepository.markEventsSynced(successfulEventUids)
+                                } catch (markErr: Exception) {
+                                    android.util.Log.w("ProjectDetailViewModel", "Failed to mark events synced: ${markErr.message}")
+                                }
+                            }
                             return@withContext true to results.joinToString(separator = "\n")
                         } else {
                             results += "POLLING | PROGRESS | Poll attempt ${pollCount + 1}/$maxPollCount"
@@ -420,12 +492,16 @@ class ProjectDetailViewModel @Inject constructor(
                 
                 if (pollCount >= maxPollCount) {
                     results += "POLLING | TIMEOUT | Please check sync status later"
+                    _eventSyncProgress.value = _eventSyncProgress.value.copy(running = false)
                     return@withContext false to results.joinToString(separator = "\n")
                 }
             }
+            // 若没有成功上传的项，也结束进度
+            _eventSyncProgress.value = _eventSyncProgress.value.copy(running = false)
             
         } catch (e: Exception) {
             results += "ERROR | Batch sync failed: ${e.message}"
+            _eventSyncProgress.value = _eventSyncProgress.value.copy(running = false)
             return@withContext false to results.joinToString(separator = "\n")
         }
         
@@ -446,6 +522,24 @@ class ProjectDetailViewModel @Inject constructor(
     private val _detailGroups = MutableStateFlow<List<DetailGroup>>(emptyList())
     val detailGroups: StateFlow<List<DetailGroup>> = _detailGroups
 
+    /** 顶部头部键值（Inspector、Project No、Type Of Inspection、Project Description） */
+    private val _headerItems = MutableStateFlow<List<KeyValueItem>>(emptyList())
+    val headerItems: StateFlow<List<KeyValueItem>> = _headerItems
+
+    /**
+     * 项目状态（用于右侧状态标签显示）
+     * 暴露为驼峰形式的文案，例如："Finished"、"Collecting"。
+     */
+    private val _projectStatus = MutableStateFlow("")
+    val projectStatus: StateFlow<String> = _projectStatus
+
+    /**
+     * 项目状态对应的标签背景色（十六进制字符串，如 "#2E5EA3"）。
+     * UI 层将解析为 Compose Color 用于渲染。
+     */
+    private val _projectStatusColorHex = MutableStateFlow("#2E5EA3")
+    val projectStatusColorHex: StateFlow<String> = _projectStatusColorHex
+
     /**
      * 函数：根据 projectUid 主动加载一次详情分组信息。
      * - 从 Room 的 ProjectDetailDao 取 rawJson
@@ -456,11 +550,19 @@ class ProjectDetailViewModel @Inject constructor(
     fun loadProjectInfoByProjectUid(projectUid: String?) {
         if (projectUid.isNullOrBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
-            val groups = runCatching {
+            val groups = try {
                 val detail = projectDetailDao.getByProjectUid(projectUid)
                 val raw = detail?.rawJson.orEmpty()
+                // 解析顶部头部信息与项目状态（将状态转为驼峰并映射颜色）
+                val (header, statusRaw) = parseHeaderItems(raw)
+                _headerItems.value = header
+                _projectStatus.value = toCamelCaseStatus(statusRaw)
+                _projectStatusColorHex.value = mapStatusColorHex(statusRaw)
                 parseDetailGroups(raw)
-            }.getOrElse { emptyList() }
+            } catch (e: Exception) {
+                Log.e("ProjectDetailViewModel", "Failed to load project info groups for $projectUid: ${e.message}", e)
+                emptyList()
+            }
             _detailGroups.value = groups
         }
         observeDetailAndRefresh(projectUid)
@@ -488,31 +590,25 @@ class ProjectDetailViewModel @Inject constructor(
                 items += KeyValueItem(label, sanitizeDisplayString(rawValue))
              }
 
-            // 1) Project Info (basic)
-            val basicInfo = mutableListOf<KeyValueItem>()
-            add(basicInfo, "project_no", data.optString("project_no", ""))
-            add(basicInfo, "project_name", data.optString("project_name", ""))
-            add(basicInfo, "type_of_inspection", projectAttr?.optString("type_of_inspection", ""))
-            add(basicInfo, "project_description", projectAttr?.optString("project_description", ""))
-            out += DetailGroup("Project Info", basicInfo)
+            // 1) 顶部信息由 Header 渲染，不作为分组
 
-            // 2) Client
+            // 2) Client Info（标签统一为 Name / Code）
             val clientInfo = mutableListOf<KeyValueItem>()
-            add(clientInfo, "client_code", master0?.optString("client_code", ""))
-            add(clientInfo, "client_name", master0?.optString("client_name", ""))
-            out += DetailGroup("Client", clientInfo)
+            clientInfo += KeyValueItem("Name", sanitizeDisplayString(master0?.optString("client_name", "")))
+            clientInfo += KeyValueItem("Code", sanitizeDisplayString(master0?.optString("client_code", "")))
+            out += DetailGroup("Client Info", clientInfo)
 
-            // 3) Facility
+            // 3) Facility Info（标签统一为 Name / Code）
             val facilityInfo = mutableListOf<KeyValueItem>()
-            add(facilityInfo, "facility_code", master0?.optString("facility_code", ""))
-            add(facilityInfo, "facility_name", master0?.optString("facility_name", ""))
-            out += DetailGroup("Facility", facilityInfo)
+            facilityInfo += KeyValueItem("Name", sanitizeDisplayString(master0?.optString("facility_name", "")))
+            facilityInfo += KeyValueItem("Code", sanitizeDisplayString(master0?.optString("facility_code", "")))
+            out += DetailGroup("Facility Info", facilityInfo)
 
-            // 4) Functional Area
+            // 4) Function Area Info（标签统一为 Name / Code）
             val functionalAreaInfo = mutableListOf<KeyValueItem>()
-            add(functionalAreaInfo, "functional_area_code", master0?.optString("functional_area_code", ""))
-            add(functionalAreaInfo, "functional_area_name", master0?.optString("functional_area_name", ""))
-            out += DetailGroup("Functional Area", functionalAreaInfo)
+            functionalAreaInfo += KeyValueItem("Name", sanitizeDisplayString(master0?.optString("functional_area_name", "")))
+            functionalAreaInfo += KeyValueItem("Code", sanitizeDisplayString(master0?.optString("functional_area_code", "")))
+            out += DetailGroup("Function Area Info", functionalAreaInfo)
 
             // 5) Purchase Orders - removed per requirement (skip adding)
 
@@ -532,26 +628,32 @@ class ProjectDetailViewModel @Inject constructor(
                 }
             }
             val assetItems = mutableListOf<KeyValueItem>()
-            assetItems += KeyValueItem("Asset Code", assetCodes.joinToString(", "))
-            assetItems += KeyValueItem("Asset Name", assetNames.joinToString(", "))
-            out += DetailGroup("Asset", assetItems)
+            assetItems += KeyValueItem("Name", assetNames.joinToString(", "))
+            assetItems += KeyValueItem("Code", assetCodes.joinToString(", "))
+            out += DetailGroup("Asset Info", assetItems)
 
-            // 7) Other Info (times + status)
-            val otherInfo = mutableListOf<KeyValueItem>()
+            // 7) Timeline（组装为区间字符串；移除 project_status）
+            val timelineInfo = mutableListOf<KeyValueItem>()
             val projectStart = optLongOrNull(projectAttr, "project_start_at")
             val projectEnd = optLongOrNull(projectAttr, "project_end_at")
             val inspStart = optLongOrNull(projectAttr, "inspection_start_at")
             val inspEnd = optLongOrNull(projectAttr, "inspection_end_at")
             val reportStart = optLongOrNull(projectAttr, "report_start_at")
             val reportEnd = optLongOrNull(projectAttr, "report_end_at")
-            add(otherInfo, "project_start_at", formatEpoch(projectStart))
-            add(otherInfo, "project_end_at", formatEpoch(projectEnd))
-            add(otherInfo, "inspection_start_at", formatEpoch(inspStart))
-            add(otherInfo, "inspection_end_at", formatEpoch(inspEnd))
-            add(otherInfo, "report_start_at", formatEpoch(reportStart))
-            add(otherInfo, "report_end_at", formatEpoch(reportEnd))
-            add(otherInfo, "project_status", data.optString("project_status", ""))
-            out += DetailGroup("Other Info", otherInfo)
+            fun rangeLabel(start: Long?, end: Long?): String {
+                val s = formatEpoch(start)
+                val e = formatEpoch(end)
+                return when {
+                    s.isNotEmpty() && e.isNotEmpty() -> "$s to $e"
+                    s.isNotEmpty() -> s
+                    e.isNotEmpty() -> e
+                    else -> ""
+                }
+            }
+            timelineInfo += KeyValueItem("Project Date", rangeLabel(projectStart, projectEnd))
+            timelineInfo += KeyValueItem("Inspection Date", rangeLabel(inspStart, inspEnd))
+            timelineInfo += KeyValueItem("Report Date", rangeLabel(reportStart, reportEnd))
+            out += DetailGroup("Timeline", timelineInfo)
 
             // 8) Report Info
             val reportInfo = mutableListOf<KeyValueItem>()
@@ -588,6 +690,73 @@ class ProjectDetailViewModel @Inject constructor(
     }
 
     /**
+     * 解析顶部头部信息（Inspector、Project No、Type Of Inspection、Project Description）与项目状态
+     * @param raw 原始 JSON 字符串
+     * @return Pair<List<KeyValueItem>, String> -> 头部键值列表与项目状态
+     */
+    private fun parseHeaderItems(raw: String): Pair<List<KeyValueItem>, String> {
+        if (raw.isBlank()) return emptyList<KeyValueItem>() to ""
+        return try {
+            val data = parseRootObject(raw)
+            val projectAttr = data.optJSONObject("project_attr")
+            val items = mutableListOf<KeyValueItem>()
+            fun addItem(k: String, v: String?) {
+                items += KeyValueItem(formatKeyLabel(k), sanitizeDisplayString(v))
+            }
+            addItem("inspector", projectAttr?.optString("reviewer", ""))
+            addItem("project_no", data.optString("project_no", ""))
+            addItem("type_of_inspection", projectAttr?.optString("type_of_inspection", ""))
+            addItem("project_description", projectAttr?.optString("project_description", ""))
+            val status = sanitizeDisplayString(data.optString("project_status", ""))
+            items to status
+        } catch (_: Exception) {
+            emptyList<KeyValueItem>() to ""
+        }
+    }
+
+    /**
+     * 函数：toCamelCaseStatus
+     * 说明：将原始状态字符串转换为驼峰形式（单词首字母大写，去除分隔符）。
+     * 示例："FINISHED" -> "Finished"；"collecting_status" -> "CollectingStatus"。
+     * @param status 原始状态文本
+     * @return 驼峰形式文本
+     */
+    private fun toCamelCaseStatus(status: String): String {
+        if (status.isBlank()) return ""
+        val tokens = status
+            .lowercase(java.util.Locale.getDefault())
+            .split(Regex("""[\s_-]+"""))
+            .filter { it.isNotBlank() }
+        return tokens.joinToString(separator = "") { token ->
+            token.replaceFirstChar { c -> c.titlecase(java.util.Locale.getDefault()) }
+        }
+    }
+
+    /**
+     * 函数：mapStatusColorHex
+     * 说明：根据状态映射胶囊标签的背景色（十六进制字符串）。
+     * - Collecting / Active -> 蓝色
+     * - Finished / Completed / Done -> 绿色
+     * - Paused / Suspended -> 橙色
+     * - Inactive / Idle -> 灰色
+     * - Delayed / Overdue / Failed -> 红色
+     * 未匹配时返回默认蓝色。
+     * @param status 原始状态文本
+     * @return 背景色十六进制字符串，如 "#2E5EA3"
+     */
+    private fun mapStatusColorHex(status: String): String {
+        val s = status.trim().uppercase(java.util.Locale.getDefault())
+        return when (s) {
+            "COLLECTING", "ACTIVE", "RUNNING" -> "#2E5EA3" // Primary Blue
+            "FINISHED", "COMPLETED", "DONE" -> "#2E8F3A"   // Success Green
+            "PAUSED", "SUSPENDED" -> "#E39A1A"               // Warning Orange
+            "INACTIVE", "IDLE" -> "#9AA0A6"                  // Neutral Gray
+            "DELAYED", "OVERDUE", "FAILED" -> "#D64545"     // Danger Red
+            else -> "#2E5EA3"
+        }
+    }
+
+    /**
      * 订阅指定 projectUid 的 ProjectDetail 记录变化，当 lastFetchedAt 更新或 rawJson 变化时，自动重新解析并刷新图片列表与详情分组。
      * 同时将historyDefectList缓存到本地defect数据库。
      * 同时订阅DefectEntity表的变化，确保event_count更新时UI能及时刷新。
@@ -598,10 +767,18 @@ class ProjectDetailViewModel @Inject constructor(
             projectDetailDao.observeByProjectUid(projectUid).collectLatest { detail ->
                 if (detail == null) return@collectLatest
                 val items = parseHistoryDefects(projectUid, detail.rawJson)
-                _historyDefects.value = items
+                // 同步数据库排序到 UI 展示顺序
+                val defects = defectRepository.getDefectsByProjectUid(projectUid).first()
+                val position = defects.mapIndexed { index, d -> d.defectNo to index }.toMap()
+                _historyDefects.value = items.sortedBy { position[it.no] ?: Int.MAX_VALUE }
                 // 新增：解析详情分组
                 val groups = parseDetailGroups(detail.rawJson)
                 _detailGroups.value = groups
+                // 解析头部键值与项目状态
+                val (header, statusRaw) = parseHeaderItems(detail.rawJson)
+                _headerItems.value = header
+                _projectStatus.value = toCamelCaseStatus(statusRaw)
+                _projectStatusColorHex.value = mapStatusColorHex(statusRaw)
                 // 新增：解析项目描述
                 val description = parseProjectDescription(detail.rawJson)
                 _projectDescription.value = description
@@ -618,7 +795,8 @@ class ProjectDetailViewModel @Inject constructor(
                 val detail = projectDetailDao.getByProjectUid(projectUid)
                 if (detail != null) {
                     val items = parseHistoryDefects(projectUid, detail.rawJson)
-                    _historyDefects.value = items
+                    val position = defects.mapIndexed { index, d -> d.defectNo to index }.toMap()
+                    _historyDefects.value = items.sortedBy { position[it.no] ?: Int.MAX_VALUE }
                 }
             }
         }
@@ -753,6 +931,12 @@ class ProjectDetailViewModel @Inject constructor(
             try {
                 // 更新StateFlow中的缺陷顺序
                 _historyDefects.value = reorderedDefects
+                // 持久化到本地数据库的 sort_order 列（按当前顺序写入）
+                val projectUid = currentProjectUid
+                if (!projectUid.isNullOrBlank()) {
+                    val orderedNos = reorderedDefects.map { it.no }
+                    defectRepository.updateSortOrders(projectUid, orderedNos)
+                }
                 
                 Log.d("ProjectDetailViewModel", "Defect order updated successfully. New order: ${reorderedDefects.map { it.no }}")
             } catch (e: Exception) {
@@ -787,6 +971,18 @@ class ProjectDetailViewModel @Inject constructor(
             }
             
             Log.d("ProjectDetailViewModel", "Event directory exists: ${eventDir.absolutePath}")
+
+            // 在打包前覆盖 meta.json 的目标项目UID，并写入数据库风险与核心字段
+            run {
+                val (okProj, msgProj) = eventRepository.overrideMetaProjectUid(appContext, eventUid, projectUid)
+                Log.d("ProjectDetailViewModel", "overrideMetaProjectUid($eventUid) -> $okProj | $msgProj")
+
+                val (okRisk, msgRisk) = eventRepository.updateMetaRiskFromDb(appContext, eventUid)
+                Log.d("ProjectDetailViewModel", "updateMetaRiskFromDb($eventUid) -> $okRisk | $msgRisk")
+
+                val (okCore, msgCore) = eventRepository.updateMetaCoreFromDb(appContext, eventUid)
+                Log.d("ProjectDetailViewModel", "updateMetaCoreFromDb($eventUid) -> $okCore | $msgCore")
+            }
 
             // Step 2: 创建事件压缩包并获取 SHA-256 哈希值
             Log.d("ProjectDetailViewModel", "Creating event zip package...")
@@ -873,6 +1069,12 @@ class ProjectDetailViewModel @Inject constructor(
                 if (statusResult.first) { // 请求成功
                     if (statusResult.second) { // 任务完成
                         Log.d("ProjectDetailViewModel", "Event sync completed successfully")
+                        // 成功后标记事件为已同步（is_synced = 1）
+                        try {
+                            eventRepository.markEventSynced(eventUid)
+                        } catch (markErr: Exception) {
+                            Log.w("ProjectDetailViewModel", "Failed to mark event synced: ${markErr.message}")
+                        }
                         return@withContext true to "Event synced to cloud successfully"
                     }
                 } else {
@@ -889,6 +1091,90 @@ class ProjectDetailViewModel @Inject constructor(
             Log.e("ProjectDetailViewModel", "uploadSingleEvent failed: ${e.message}", e)
             false to "Sync failed: ${e.message}"
         }
+    }
+
+    /**
+     * Function: uploadSingleEventWithRetry
+     * Description: Adds automatic retry for single event sync upload.
+     * Behavior:
+     * - Retry up to `maxRetries` times when `uploadSingleEvent` fails
+     * - Wait `delayMs` milliseconds between attempts
+     * - Return immediately on first success
+     *
+     * @param eventUid Event UID
+     * @param projectUid Project UID
+     * @param maxRetries Maximum retry attempts (default 5)
+     * @param delayMs Delay between attempts in milliseconds (default 3000)
+     * @return Pair<Boolean, String> success flag and message
+     */
+    suspend fun uploadSingleEventWithRetry(
+        eventUid: String,
+        projectUid: String,
+        maxRetries: Int = 5,
+        delayMs: Long = 3000L
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        var lastMessage = ""
+        for (attempt in 1..maxRetries) {
+            val (ok, msg) = try {
+                uploadSingleEvent(eventUid, projectUid)
+            } catch (e: Exception) {
+                false to ("Exception: ${e.message}")
+            }
+            if (ok) {
+                Log.d("ProjectDetailViewModel", "uploadSingleEventWithRetry success on attempt $attempt")
+                return@withContext true to "Sync succeeded on attempt $attempt"
+            }
+            lastMessage = msg
+            Log.w("ProjectDetailViewModel", "uploadSingleEvent attempt $attempt failed: $msg")
+            if (attempt < maxRetries) {
+                kotlinx.coroutines.delay(delayMs)
+            }
+        }
+        false to "Sync failed after $maxRetries attempts: $lastMessage"
+    }
+
+    /**
+     * Function: uploadSelectedEventsWithRetry
+     * Description: Adds automatic retry around batch sync upload for Events.
+     * Behavior:
+     * - Invokes `uploadSelectedEvents` and retries on failure
+     * - Keeps existing progress updates; progress resets per attempt
+     * - Waits `delayMs` milliseconds between attempts
+     *
+     * @param context Android context
+     * @param eventUids List of event UIDs to upload
+     * @param projectUid Project UID
+     * @param maxRetries Maximum retry attempts (default 5)
+     * @param delayMs Delay between attempts in milliseconds (default 3000)
+     * @return Pair<Boolean, String> success flag and message
+     */
+    suspend fun uploadSelectedEventsWithRetry(
+        context: Context,
+        eventUids: List<String>,
+        projectUid: String,
+        maxRetries: Int = 5,
+        delayMs: Long = 3000L
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        var lastMessage = ""
+        for (attempt in 1..maxRetries) {
+            // Reset progress each attempt to reflect actual re-run
+            _eventSyncProgress.value = _eventSyncProgress.value.copy(running = true, total = eventUids.size, completed = 0)
+            val (ok, msg) = try {
+                uploadSelectedEvents(context, eventUids, projectUid)
+            } catch (e: Exception) {
+                false to ("Exception: ${e.message}")
+            }
+            if (ok) {
+                Log.d("ProjectDetailViewModel", "uploadSelectedEventsWithRetry success on attempt $attempt")
+                return@withContext true to "Batch sync succeeded on attempt $attempt"
+            }
+            lastMessage = msg
+            Log.w("ProjectDetailViewModel", "uploadSelectedEvents attempt $attempt failed: $msg")
+            if (attempt < maxRetries) {
+                kotlinx.coroutines.delay(delayMs)
+            }
+        }
+        false to "Batch sync failed after $maxRetries attempts: $lastMessage"
     }
 
     private fun sanitizeDisplayString(raw: String?): String {

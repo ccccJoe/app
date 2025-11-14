@@ -4,6 +4,8 @@ package com.simsapp.ui.storage
  * File: StoragePickerScreen.kt
  * Description: 数字资产选择页面，用于选择和管理数字资产，基于project_digital_asset_tree数据
  * Author: SIMS Team
+ * Change Log:
+ *  - 2025-11-06: Treat 'Setting' nodes as folder-like for navigation and selection.
  */
 
 import androidx.compose.foundation.background
@@ -46,7 +48,8 @@ fun StoragePickerScreen(
     onBackClick: () -> Unit,
     onItemSelected: (DigitalAssetTreeNode) -> Unit = {},
     onMultipleItemsSelected: (List<DigitalAssetTreeNode>) -> Unit = {},
-    selectedAssetFileIds: List<String> = emptyList(), // 新增：用于回显之前选中的资产fileId列表
+    selectedAssetFileIds: List<String> = emptyList(), // 回显：之前选中的资产fileId列表（兼容旧数据）
+    selectedAssetNodeIds: List<String> = emptyList(), // 回显：优先使用节点ID进行精确回显
     viewModel: StoragePickerViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -60,44 +63,36 @@ fun StoragePickerScreen(
         }
     }
 
-    // 回显之前选中的资产
-    LaunchedEffect(selectedAssetFileIds) {
-        if (selectedAssetFileIds.isNotEmpty()) {
-            android.util.Log.d("StoragePickerScreen", "开始回显数字资产: ${selectedAssetFileIds.joinToString()}")
-            viewModel.setSelectedAssetsByFileIds(selectedAssetFileIds)
-        } else {
-            android.util.Log.d("StoragePickerScreen", "没有需要回显的数字资产")
+    // 回显之前选中的资产（优先 nodeId，fallback fileId）
+    LaunchedEffect(selectedAssetNodeIds, selectedAssetFileIds) {
+        when {
+            selectedAssetNodeIds.isNotEmpty() -> {
+                android.util.Log.d("StoragePickerScreen", "按节点ID回显数字资产: ${selectedAssetNodeIds.joinToString()}")
+                viewModel.setSelectedAssetsByNodeIds(selectedAssetNodeIds)
+            }
+            selectedAssetFileIds.isNotEmpty() -> {
+                android.util.Log.d("StoragePickerScreen", "按文件ID回显数字资产: ${selectedAssetFileIds.joinToString()}")
+                viewModel.setSelectedAssetsByFileIds(selectedAssetFileIds)
+            }
+            else -> {
+                android.util.Log.d("StoragePickerScreen", "没有需要回显的数字资产")
+            }
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Digital Asset Selection",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (uiState.currentPath.size > 1) {
-                            viewModel.goBack()
-                        } else {
-                            onBackClick()
-                        }
-                    }) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
+            com.simsapp.ui.common.AppTopBar(
+                title = "Digital Asset Selection",
+                onBack = {
+                    if (uiState.currentPath.size > 1) {
+                        viewModel.goBack()
+                    } else {
+                        onBackClick()
                     }
                 },
-                // 移除多选模式切换按钮，让列表一直保持可选状态
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.White
-                )
+                containerColor = Color.White,
+                titleColor = Color.Black
             )
         },
         floatingActionButton = {
@@ -127,7 +122,7 @@ fun StoragePickerScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
                 .background(Color(0xFFF5F5F5)),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // 面包屑导航作为header item
@@ -212,7 +207,7 @@ fun StoragePickerScreen(
                             isSelected = uiState.selectedItems.contains(item.id),
                             isMultiSelectMode = true, // 始终为true，因为列表一直可选
                             onClick = {
-                                if (item.treeNodeType != "Folder") {
+                                if (!isFolderType(item.treeNodeType)) {
                                     // 非文件夹项目切换选中状态
                                     viewModel.toggleItemSelection(item)
                                 } else {
@@ -324,8 +319,8 @@ fun DigitalAssetItemCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // 多选模式下显示选择状态图标（仅非文件夹）
-            if (isMultiSelectMode && item.treeNodeType != "Folder") {
+            // 多选模式下显示选择状态图标（仅非文件夹/Setting）
+            if (isMultiSelectMode && !isFolderType(item.treeNodeType)) {
                 Icon(
                     imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
                     contentDescription = if (isSelected) "Selected" else "Not Selected",
@@ -338,8 +333,8 @@ fun DigitalAssetItemCard(
             // 文件夹/文件图标
             Icon(
                 imageVector = Icons.Default.Folder,
-                contentDescription = if (item.treeNodeType == "Folder") "Folder" else "File",
-                tint = if (item.treeNodeType == "Folder") Color(0xFFFFA726) else Color(0xFF42A5F5),
+                contentDescription = if (isFolderType(item.treeNodeType)) "Folder" else "File",
+                tint = if (isFolderType(item.treeNodeType)) Color(0xFFFFA726) else Color(0xFF42A5F5),
                 modifier = Modifier.size(24.dp)
             )
             
@@ -357,7 +352,7 @@ fun DigitalAssetItemCard(
                 )
                 
                 // 只为非文件夹显示类型信息
-                if (item.treeNodeType != "Folder") {
+                if (!isFolderType(item.treeNodeType)) {
                     Spacer(modifier = Modifier.height(4.dp))
                     
                     Text(
@@ -369,7 +364,7 @@ fun DigitalAssetItemCard(
             }
             
             // 进入箭头（仅文件夹显示）
-            if (item.treeNodeType == "Folder") {
+            if (isFolderType(item.treeNodeType)) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = "Enter",
@@ -379,4 +374,15 @@ fun DigitalAssetItemCard(
             }
         }
     }
+}
+
+/**
+ * Helper: determine whether a type should be treated as a folder in UI.
+ * "Folder" and "Setting" are both folder-like.
+ *
+ * @param type Node type string
+ * @return true if folder-like; otherwise false
+ */
+private fun isFolderType(type: String?): Boolean {
+    return type.equals("Folder", ignoreCase = true) || type.equals("Setting", ignoreCase = true)
 }

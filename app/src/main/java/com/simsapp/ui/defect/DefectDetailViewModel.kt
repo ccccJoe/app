@@ -39,11 +39,15 @@ data class DetailSection(val title: String, val items: List<KeyValueItem>)
  * @param basic Basic Info section
  * @param others Others section
  * @param images Local image absolute paths (thumbnails), same logic as history defect list
+ * @param assetImages 缺陷关联的数字资产中的图片本地路径列表
+ * @param assetOthers 缺陷关联的非图片数字资产详情列表（用于列表展示与预览）
  */
 data class DefectDetailUiState(
     val basic: DetailSection = DetailSection("Basic Info", emptyList()),
     val others: DetailSection = DetailSection("Others", emptyList()),
-    val images: List<String> = emptyList()
+    val images: List<String> = emptyList(),
+    val assetImages: List<String> = emptyList(),
+    val assetOthers: List<com.example.sims_android.ui.event.DigitalAssetDetail> = emptyList()
 )
 
 /**
@@ -60,6 +64,7 @@ data class DefectDetailUiState(
 @HiltViewModel
 class DefectDetailViewModel @Inject constructor(
     private val projectDetailDao: ProjectDetailDao,
+    private val defectDataAssetDao: com.simsapp.data.local.dao.DefectDataAssetDao,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
@@ -72,10 +77,21 @@ class DefectDetailViewModel @Inject constructor(
      * @param projectUid The project unique id to locate cached detail and images directory.
      * @param defectNo The defect number used to match in history_defect_list.
      */
+    /**
+     * 加载缺陷详情与资产信息。
+     *
+     * 流程：
+     * 1) 读取项目详情缓存原始 JSON；
+     * 2) 解析目标缺陷基本信息与本地图片缩略图；
+     * 3) 从 Room 表按缺陷 uid 查询数字资产，并拆分为图片与其他文件。
+     *
+     * @param projectUid 项目唯一标识，用于定位缓存与图片目录
+     * @param defectNo 缺陷编号，用于在 JSON 中匹配目标项
+     */
     fun load(projectUid: String?, defectNo: String) {
         if (projectUid.isNullOrBlank() || defectNo.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
-            val detail = runCatching { projectDetailDao.getByProjectUid(projectUid) }.getOrNull()
+            val detail = try { projectDetailDao.getByProjectUid(projectUid) } catch (_: Exception) { null }
             val raw = detail?.rawJson.orEmpty()
             val state = parseDefectDetail(projectUid, raw, defectNo)
             _uiState.value = state
@@ -88,7 +104,18 @@ class DefectDetailViewModel @Inject constructor(
      * @param raw Raw JSON string from ProjectDetailEntity
      * @param defectNo Target defect number to locate
      */
-    private fun parseDefectDetail(projectUid: String, raw: String, defectNo: String): DefectDetailUiState {
+    /**
+     * 解析缺陷详情与数字资产。
+     *
+     * - 支持常见外层包装（data/result/item/content）。
+     * - 图片信息使用与历史缺陷列表一致的本地目录规则。
+     * - 缺陷数字资产通过 `defect_uid` 或 `uid` 字段获取，再查询 Room 表。
+     *
+     * @param projectUid 项目 UID
+     * @param raw 原始 JSON 字符串
+     * @param defectNo 缺陷编号
+     */
+    private suspend fun parseDefectDetail(projectUid: String, raw: String, defectNo: String): DefectDetailUiState {
         if (raw.isBlank()) return DefectDetailUiState()
         return try {
             val root = parseRootObject(raw)
@@ -130,10 +157,35 @@ class DefectDetailViewModel @Inject constructor(
                 dir.listFiles()?.sortedBy { it.name }?.map { it.absolutePath } ?: emptyList()
             } else emptyList()
 
+            // 解析缺陷 UID（兼容 uid / defect_uid）并查询数字资产
+            val defectUid = item.optString("uid").ifBlank { item.optString("defect_uid") }
+            val assetImages: List<String>
+            val assetOthers: List<com.example.sims_android.ui.event.DigitalAssetDetail>
+            if (defectUid.isNotBlank()) {
+                val assets = try { defectDataAssetDao.getByDefectUid(defectUid) } catch (_: Exception) { emptyList() }
+                val imageTypes = setOf("PIC", "IMAGE", "JPG", "JPEG", "PNG", "GIF", "BMP", "WEBP")
+                assetImages = assets.filter { imageTypes.contains(it.type.uppercase()) }
+                    .mapNotNull { it.localPath }
+                assetOthers = assets.filter { !imageTypes.contains(it.type.uppercase()) }
+                    .map { entity ->
+                        com.example.sims_android.ui.event.DigitalAssetDetail(
+                            fileId = entity.fileId,
+                            fileName = entity.fileName ?: entity.fileId,
+                            type = (entity.type ?: "").ifBlank { "UNKNOWN" },
+                            localPath = entity.localPath
+                        )
+                    }
+            } else {
+                assetImages = emptyList()
+                assetOthers = emptyList()
+            }
+
             DefectDetailUiState(
                 basic = DetailSection("Basic Info", basicItems),
                 others = DetailSection("Others", otherItems),
-                images = images
+                images = images,
+                assetImages = assetImages,
+                assetOthers = assetOthers
             )
         } catch (_: Exception) {
             DefectDetailUiState()

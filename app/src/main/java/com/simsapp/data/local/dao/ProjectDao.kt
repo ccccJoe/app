@@ -69,6 +69,17 @@ interface ProjectDao {
     @Query("UPDATE project SET defect_count = :defectCount, event_count = :eventCount WHERE project_id = :projectId")
     suspend fun updateCounters(projectId: Long, defectCount: Int, eventCount: Int)
 
+    /**
+     * 函数：updateStatusByUid
+     * 说明：根据 `project_uid` 更新项目的 `status` 字段，仅变更状态不影响其他字段。
+     * 参数：
+     * - uid: 目标项目的唯一业务标识
+     * - status: 远端最新状态字符串（大小写不敏感，不做转换直接入库）
+     * 返回：无
+     */
+    @Query("UPDATE project SET status = :status WHERE project_uid = :uid")
+    suspend fun updateStatusByUid(uid: String, status: String)
+
     /** 清空项目表，支持全量覆盖更新 */
     @Query("DELETE FROM project")
     suspend fun clearAll()
@@ -113,6 +124,14 @@ interface ProjectDao {
     @Query("SELECT * FROM project WHERE (UPPER(status) = 'FINISHED' OR status = '已完成') AND (is_deleted = 0 OR is_deleted IS NULL) ORDER BY name ASC")
     fun getFinishedProjects(): Flow<List<ProjectEntity>>
 
+    /**
+     * 获取所有非已完成状态的项目（排除已删除的项目）
+     * 说明：用于上传前的目标项目选择弹窗，仅展示可收集或激活中的项目。
+     * 兼容中英文状态值，过滤 FINISHED/已完成。
+     */
+    @Query("SELECT * FROM project WHERE (UPPER(status) <> 'FINISHED' AND status <> '已完成') AND (is_deleted = 0 OR is_deleted IS NULL) ORDER BY name ASC")
+    fun getNotFinishedProjects(): Flow<List<ProjectEntity>>
+
     /** 批量删除项目（根据项目ID列表） */
     @Query("DELETE FROM project WHERE project_id IN (:projectIds)")
     suspend fun deleteByIds(projectIds: List<Long>)
@@ -120,6 +139,25 @@ interface ProjectDao {
     /** Mark projects as deleted by IDs (batch soft deletion). */
     @Query("UPDATE project SET is_deleted = 1 WHERE project_id IN (:projectIds)")
     suspend fun markAsDeleted(projectIds: List<Long>)
+
+    /**
+     * 函数：updateRalationTimeByUid
+     * 说明：根据 `project_uid` 更新项目的 `ralation_time` 字段，用于首页 project_list 接口缓存。
+     * 参数：
+     * - uid: 目标项目的唯一业务标识
+     * - time: 关系时间（毫秒），可为空；空时写入 NULL
+     */
+    @Query("UPDATE project SET ralation_time = :time WHERE project_uid = :uid")
+    suspend fun updateRalationTimeByUid(uid: String, time: Long?)
+
+    // --- Diagnostics helpers for migration verification ---
+    /** Count rows with any nullable critical fields that should be non-null (post-migration). */
+    @Query("SELECT COUNT(*) FROM project WHERE name IS NULL OR project_uid IS NULL OR project_hash IS NULL OR status IS NULL OR defect_count IS NULL OR event_count IS NULL OR is_deleted IS NULL")
+    suspend fun countRowsWithNulls(): Int
+
+    /** Sample a few rows for logging to inspect field values post-migration. */
+    @Query("SELECT * FROM project LIMIT :limit")
+    suspend fun sample(limit: Int): List<ProjectEntity>
 }
 
 /**

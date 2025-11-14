@@ -1,3 +1,10 @@
+/*
+ * File: EventFormScreen.kt
+ * Description: Compose screen for creating a new Event, including top app bar
+ *              with back navigation and title, and a form for location,
+ *              description, attachments, audio recording, and risk assessment.
+ * Author: SIMS-Android Development Team
+ */
 package com.example.sims_android.ui.event
 
 import android.app.Activity
@@ -38,6 +45,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -52,6 +62,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import coil.compose.AsyncImage
 import com.simsapp.ui.event.components.DigitalAssetCategorizedDisplay
+import com.simsapp.ui.common.SectionCard
+import com.simsapp.ui.common.HeaderActionButton
 import com.simsapp.ui.event.components.AssetPreviewDialog
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
@@ -60,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.ui.text.style.TextOverflow
 import com.simsapp.data.local.entity.DefectEntity
 import com.simsapp.data.local.entity.EventEntity
 import com.simsapp.ui.event.StructuralDefectWizardDialog
@@ -67,9 +80,11 @@ import com.simsapp.ui.event.StructuralDefectData
 import com.example.sims_android.ui.event.EventFormViewModel
 import com.example.sims_android.ui.event.DigitalAssetDetail
 import com.simsapp.ui.common.RiskTagColors
+import com.simsapp.ui.common.ProjectPickerBottomSheet
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
+import com.google.gson.Gson
 import java.text.SimpleDateFormat
 import java.util.Date
 import android.graphics.BitmapFactory
@@ -106,7 +121,7 @@ import kotlin.math.PI
 import kotlin.math.sin
 import kotlin.math.abs
 import android.util.Log
-import com.google.gson.Gson
+// Gson 已在上方导入，不再重复导入
 
 /**
  * Composable: EventFormScreen
@@ -119,18 +134,18 @@ import com.google.gson.Gson
  * @param projectName The current project name from upstream navigation
  * @param onBack Callback to navigate back
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
- fun EventFormScreen(
-     projectName: String,
-    eventId: String = "",
-     defectId: String = "",
-     onBack: () -> Unit,
-     onOpenStorage: (String, List<String>) -> Unit, // 修改为传递projectUid和当前选中的资产fileId列表
-     selectedStorage: List<String> = emptyList(),
-     selectedStorageFileIds: List<String> = emptyList(), // 恢复：使用List类型
-     onOpenDefect: ((DefectEntity) -> Unit)? = null
- ) {
+ @OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+  fun EventFormScreen(
+      projectName: String,
+     eventId: String = "",
+      defectId: String = "",
+      onBack: () -> Unit,
+      onOpenStorage: (String, List<String>, List<String>) -> Unit, // 传递projectUid、选中的节点ID与文件ID
+      selectedStorageNodeIds: List<String> = emptyList(), // 新增：节点ID回显
+      selectedStorageFileIds: List<String> = emptyList(), // 兼容：fileId回显
+      onOpenDefect: ((DefectEntity) -> Unit)? = null
+  ) {
      // 通过 Hilt 获取 ViewModel，提供风险矩阵加载能�?
      val viewModel: EventFormViewModel = hiltViewModel()
      val context = LocalContext.current
@@ -139,14 +154,40 @@ import com.google.gson.Gson
      // 新增：获取projectUid状�?
      var projectUid by remember { mutableStateOf<String?>(null) }
 
-     var location by remember { mutableStateOf("") }
-     var description by remember { mutableStateOf("") }
+     // 修改：使用 rememberSaveable 保留返回页面后的输入状态（避免导航往返清空）
+     // 以 projectName 和 eventId 作为键，保证不同项目/事件的状态独立
+     var location by rememberSaveable(projectName, eventId) { mutableStateOf("") }
+     var description by rememberSaveable(projectName, eventId) { mutableStateOf("") }
      // 新增：维�?Room 中草稿事件的 eventId（便于后续根�?ID 继续编辑�?
-     var eventRoomId by remember { mutableStateOf<Long?>(null) }
-     val photoFiles = remember { mutableStateListOf<File>() }
-     val audioFiles = remember { mutableStateListOf<File>() }
+    // 修改：eventRoomId使用rememberSaveable持久化，避免从子页面返回后丢失导致重复插入
+    var eventRoomId by rememberSaveable(projectName, eventId) { mutableStateOf<Long?>(null) }
+    // 替换：使用 rememberSaveable + listSaver 持久化照片与音频列表
+    val photoFiles = rememberSaveable(saver = androidx.compose.runtime.saveable.listSaver(
+        save = { list -> list.map { it.absolutePath } },
+        restore = { paths ->
+            val restored = mutableStateListOf<File>()
+            paths.forEach { p ->
+                val f = File(p)
+                if (f.exists()) restored.add(f)
+            }
+            restored
+        }
+    )) { mutableStateListOf<File>() }
+    val audioFiles = rememberSaveable(saver = androidx.compose.runtime.saveable.listSaver(
+        save = { list -> list.map { it.absolutePath } },
+        restore = { paths ->
+            val restored = mutableStateListOf<File>()
+            paths.forEach { p ->
+                val f = File(p)
+                if (f.exists()) restored.add(f)
+            }
+            restored
+        }
+    )) { mutableStateListOf<File>() }
      var isRecording by remember { mutableStateOf(false) }
      var isSaving by remember { mutableStateOf(false) }
+     // 新增：自动保存互斥标记，避免多个触发点并发插入导致重复事件
+     var isAutoSaving by remember { mutableStateOf(false) }
      // 拍照进行中的临时文件，仅在成功回调后加入列表
      var pendingPhoto by remember { mutableStateOf<File?>(null) }
      // 大图预览选择的照�?
@@ -155,10 +196,37 @@ import com.google.gson.Gson
      var pendingAudio by remember { mutableStateOf<File?>(null) }
      // 风险评估向导弹窗显示状态与结果缓存
     var showRiskDialog by remember { mutableStateOf(false) }
+    // 新增：riskResult 使用 JSON + rememberSaveable 持久化，避免返回后丢失
+    var riskResultJson by rememberSaveable(projectName, eventId) { mutableStateOf<String?>(null) }
     var riskResult by remember { mutableStateOf<RiskAssessmentResult?>(null) }
+    // 双向同步：riskResult -> riskResultJson
+    // 修复：仅在 riskResult 非空时更新 JSON，避免页面往返导致 riskResult 暂为 null 时清空已保存的风险评估数据
+    LaunchedEffect(riskResult) {
+        if (riskResult != null) {
+            try {
+                riskResultJson = Gson().toJson(riskResult)
+            } catch (_: Exception) {
+                // 忽略序列化错误，保持已有 JSON 不变
+            }
+        }
+    }
+    // 双向同步：riskResultJson -> riskResult
+    LaunchedEffect(riskResultJson) {
+        if (riskResult == null && !riskResultJson.isNullOrBlank()) {
+            try {
+                riskResult = Gson().fromJson(riskResultJson, RiskAssessmentResult::class.java)
+            } catch (_: Exception) {
+                // ignore parse error
+            }
+        }
+    }
     // 结构缺陷详情数据（对象与原始JSON双轨保存，原始JSON保留summary字段）
+    // 文件级注释：结构缺陷详情状态
+    // - 问题背景：在填写“Structural Defect Details”后，前往数字资产选择并返回，之前输入被清空。
+    // - 根因分析：使用 remember 持有的状态在页面被临时移除（如跳转至选择页面）后可能丢失；返回后触发自动保存会用空值覆盖数据库。
+    // - 修复策略：将 JSON 原始数据改为 rememberSaveable 以通过 SavedInstanceState 持久化；并在恢复时通过 JSON 解析得到结构化对象。
     var structuralDefectResult by remember { mutableStateOf<StructuralDefectData?>(null) }
-    var structuralDefectJsonRaw by remember { mutableStateOf<String?>(null) }
+    var structuralDefectJsonRaw by rememberSaveable { mutableStateOf<String?>(null) }
     
     // 新增：Structural Defect Activity Result Launcher
     val structuralDefectLauncher = rememberLauncherForActivityResult(
@@ -178,6 +246,21 @@ import com.google.gson.Gson
             }
         }
     }
+
+    // 函数级注释：通过 JSON 恢复结构缺陷详情对象
+    // 参数：无（依赖 structuralDefectJsonRaw 状态变化）
+    // 返回：无（副作用更新 structuralDefectResult）
+    // 逻辑：当 structuralDefectJsonRaw 非空时，解析为 StructuralDefectData；为空时清空对象，避免脏数据。
+    LaunchedEffect(structuralDefectJsonRaw) {
+        try {
+            structuralDefectResult = structuralDefectJsonRaw?.let { json ->
+                Gson().fromJson(json, StructuralDefectData::class.java)
+            }
+        } catch (e: Exception) {
+            Log.e("EventFormScreen", "Failed to restore structural defect from JSON: ${e.message}", e)
+            structuralDefectResult = null
+        }
+    }
      // 删除确认弹窗显示状态（仅编辑态）
     var showDeleteDialog by remember { mutableStateOf(false) }
     // 删除状态标记，用于阻止删除后的自动保存
@@ -187,8 +270,16 @@ import com.google.gson.Gson
     val selectedDefects = remember { mutableStateListOf<DefectEntity>() }
     var showDefectSelectionDialog by remember { mutableStateOf(false) }
     
-    // 新增：数字资产选择状�?
+    // 重复声明清理：该段已在上文替换为 rememberSaveable 版本，移除此处重复声明
+
+    // 新增：数字资产选择状态（fileId）
     var currentSelectedStorageFileIds by remember { mutableStateOf(selectedStorageFileIds) }
+    // 新增：记录最后一次非空选择（fileId），用于页面退出兜底保存
+    var lastNonEmptySelectedStorageFileIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    // 新增：数字资产选择状态（nodeId）
+    var currentSelectedStorageNodeIds by remember { mutableStateOf(selectedStorageNodeIds) }
+    // 新增：记录最后一次非空选择（nodeId），用于页面退出兜底保存
+    var lastNonEmptySelectedStorageNodeIds by remember { mutableStateOf<List<String>>(emptyList()) }
     
     // 新增：数字资产详细信息状�?
     var digitalAssetDetails by remember { mutableStateOf<List<DigitalAssetDetail>>(emptyList()) }
@@ -196,19 +287,62 @@ import com.google.gson.Gson
     // 新增：预览对话框状�?
     var showAssetPreview by remember { mutableStateOf(false) }
     var previewAsset by remember { mutableStateOf<DigitalAssetDetail?>(null) }
+
+    // 新增：未完成项目列表与弹窗显示状态
+    val notFinishedProjects by viewModel.getNotFinishedProjects().collectAsState(initial = emptyList())
+    var showProjectPicker by remember { mutableStateOf(false) }
     
-    // 新增：存储从数据库加载的事件UID
-    var loadedEventUid by remember { mutableStateOf<String?>(null) }
+    // 修改：存储从数据库加载或首次保存后的事件UID，并使用rememberSaveable持久化
+    var loadedEventUid by rememberSaveable(projectName, eventId) { mutableStateOf<String?>(null) }
     
     // 新增：数字资产文件名状态
     var digitalAssetFileNames by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    // 新增：监听数字资产节点ID选择变化，并映射为 fileId 后加载详情
+    LaunchedEffect(selectedStorageNodeIds) {
+        if (selectedStorageNodeIds.isNotEmpty()) {
+            currentSelectedStorageNodeIds = selectedStorageNodeIds
+            lastNonEmptySelectedStorageNodeIds = selectedStorageNodeIds
+            Log.d("EventFormScreen", "LaunchedEffect triggered - selectedStorageNodeIds: ${selectedStorageNodeIds.joinToString()}")
+
+            try {
+                val mappedFileIds = viewModel.getFileIdsByNodeIds(selectedStorageNodeIds)
+                if (mappedFileIds.isNotEmpty()) {
+                    currentSelectedStorageFileIds = mappedFileIds
+                    lastNonEmptySelectedStorageFileIds = mappedFileIds
+                    digitalAssetFileNames = viewModel.getFileNamesByIds(mappedFileIds)
+                    digitalAssetDetails = viewModel.getDigitalAssetDetailsByIds(mappedFileIds)
+                    Log.d("EventFormScreen", "Mapped nodeIds to ${mappedFileIds.size} fileIds and loaded details")
+                } else {
+                    // Fallback：无法映射fileId时，直接根据nodeId加载基础详情，但不清空已有fileId选择
+                    digitalAssetDetails = viewModel.getDigitalAssetDetailsByNodeIds(selectedStorageNodeIds)
+                    digitalAssetFileNames = selectedStorageNodeIds
+                    Log.w("EventFormScreen", "NodeIds mapping returned empty; loaded details by nodeIds as fallback")
+                }
+            } catch (e: Exception) {
+                Log.e("EventFormScreen", "Error mapping nodeIds to fileIds: ${e.message}", e)
+                // Fallback：构造基础详情，避免界面崩溃
+                digitalAssetDetails = selectedStorageNodeIds.map { nodeId ->
+                    DigitalAssetDetail(fileId = nodeId, fileName = nodeId, type = "file", localPath = null)
+                }
+            }
+        } else {
+            Log.d("EventFormScreen", "Ignore empty selectedStorageNodeIds update to preserve last non-empty selection")
+        }
+    }
     
     // 新增：监听数字资产选择变化
     LaunchedEffect(selectedStorageFileIds) {
-        currentSelectedStorageFileIds = selectedStorageFileIds
-        android.util.Log.d("EventFormScreen", "LaunchedEffect triggered - selectedStorageFileIds: ${selectedStorageFileIds.joinToString()}")
-        android.util.Log.d("EventFormScreen", "Updated currentSelectedStorageFileIds: ${currentSelectedStorageFileIds.joinToString()}")
-        Log.d("EventFormScreen", "Digital assets updated: ${selectedStorageFileIds.size} files selected")
+        // 修复：避免外部导航重置导致资产在页面销毁前被清空
+        if (selectedStorageFileIds.isNotEmpty()) {
+            currentSelectedStorageFileIds = selectedStorageFileIds
+            lastNonEmptySelectedStorageFileIds = selectedStorageFileIds
+            android.util.Log.d("EventFormScreen", "LaunchedEffect triggered - selectedStorageFileIds: ${selectedStorageFileIds.joinToString()}")
+            android.util.Log.d("EventFormScreen", "Updated currentSelectedStorageFileIds: ${currentSelectedStorageFileIds.joinToString()}")
+            Log.d("EventFormScreen", "Digital assets updated: ${selectedStorageFileIds.size} files selected")
+        } else {
+            Log.d("EventFormScreen", "Ignore empty selectedStorageFileIds update to preserve last non-empty selection")
+        }
         
         // 修复：在新建模式下，首次选择数字资产时同步更新初始状态
         // 避免触发不必要的自动保存
@@ -253,34 +387,56 @@ import com.google.gson.Gson
     var initialSelectedDefects by remember { mutableStateOf<List<DefectEntity>>(emptyList()) }
     var initialDigitalAssetFileIds by remember { mutableStateOf<List<String>>(emptyList()) } // 新增：数字资产初始状�?
     
-    // 新增：监听风险矩阵评估结果和数字资产变化，触发自动保存
-    LaunchedEffect(riskResult, currentSelectedStorageFileIds) {
-        // 检测风险矩阵评估结果或数字资产是否发生变化
+    // 新增：监听风险矩阵评估结果、数字资产fileId与nodeId变化，触发自动保存
+    LaunchedEffect(riskResult, currentSelectedStorageFileIds, currentSelectedStorageNodeIds) {
+        // 避免并发保存：若已有自动保存在进行中，跳过本次触发
+        if (isAutoSaving) {
+            Log.d("EventFormScreen", "Skip auto-save: another save in progress")
+            return@LaunchedEffect
+        }
+        // 检测风险矩阵评估结果或数字资产是否发生变化（基于有效 fileIds 映射）
         val riskResultChanged = riskResult != initialRiskResult
-        val digitalAssetsChanged = currentSelectedStorageFileIds != initialDigitalAssetFileIds
-        
+        // 计算有效的数字资产 fileIds：优先用当前 fileIds，其次用 nodeIds→fileIds 映射
+        val effectiveCurrentFileIds: List<String> = when {
+            currentSelectedStorageFileIds.isNotEmpty() -> currentSelectedStorageFileIds
+            currentSelectedStorageNodeIds.isNotEmpty() -> try {
+                viewModel.getFileIdsByNodeIds(currentSelectedStorageNodeIds)
+            } catch (_: Exception) { emptyList() }
+            else -> emptyList()
+        }
+        val digitalAssetsChanged = effectiveCurrentFileIds != initialDigitalAssetFileIds
+
         Log.d("EventFormScreen", "Auto-save check: riskChanged=$riskResultChanged, assetsChanged=$digitalAssetsChanged")
-        Log.d("EventFormScreen", "Current assets: ${currentSelectedStorageFileIds.joinToString()}")
+        Log.d("EventFormScreen", "Current assets(effective): ${effectiveCurrentFileIds.joinToString()}")
         Log.d("EventFormScreen", "Initial assets: ${initialDigitalAssetFileIds.joinToString()}")
-        
+
         // 修复：只要有风险评估结果变化或数字资产变化就触发自动保存
         // 不再要求其他初始状态不为空，确保单独选择数字资产也能自动保存
         if (riskResultChanged || digitalAssetsChanged) {
             Log.d("EventFormScreen", "Auto-save triggered by risk result or digital assets change: riskChanged=$riskResultChanged, assetsChanged=$digitalAssetsChanged")
-            
+
             // 跳过完全空白的初始化触发（所有状态都为初始值且没有实际内容）
-            val hasAnyContent = location.isNotBlank() || description.isNotBlank() || 
-                photoFiles.isNotEmpty() || audioFiles.isNotEmpty() || 
-                riskResult != null || currentSelectedStorageFileIds.isNotEmpty()
-            
+            val hasAnyContent = location.isNotBlank() || description.isNotBlank() ||
+                photoFiles.isNotEmpty() || audioFiles.isNotEmpty() ||
+                riskResult != null || currentSelectedStorageFileIds.isNotEmpty() || currentSelectedStorageNodeIds.isNotEmpty()
+
             if (hasAnyContent) {
                 // 触发自动保存
                 try {
-                    val isEditMode = eventId.isNotBlank()
-                    val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
-                    
+                    isAutoSaving = true
+                    // 修复关键逻辑：优先通过事件UID解析已存在的Room ID，避免重复插入
+                    // 修复：优先通过事件UID解析已存在的Room ID，支持导航参数UID或本地持久化的UID
+                    val idFromUid = when {
+                        eventId.isNotBlank() -> viewModel.getEventRoomIdByUid(eventId)
+                        !loadedEventUid.isNullOrBlank() -> viewModel.getEventRoomIdByUid(loadedEventUid!!)
+                        else -> null
+                    }
+                    val existingEventId = idFromUid ?: eventRoomId
+                    val isEditMode = existingEventId != null && existingEventId > 0
+                    val currentEventId = existingEventId
+
                     Log.d("EventFormScreen", "Executing auto-save: isEditMode=$isEditMode, currentEventId=$currentEventId")
-                    
+
                     val result = viewModel.saveEventToRoom(
                         projectName = projectName,
                         location = location,
@@ -291,30 +447,47 @@ import com.google.gson.Gson
                         photoFiles = photoFiles,
                         audioFiles = audioFiles,
                         selectedDefects = selectedDefects.toList(),
-                        digitalAssetFileIds = currentSelectedStorageFileIds,
+                        // 修复：数字资产参数采用有效 fileIds（nodeIds→fileIds 映射兜底）
+                        digitalAssetFileIds = effectiveCurrentFileIds,
                         structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
                     )
-                    
-                    result.onSuccess { savedEventId ->
+                    val savedEventId = result.getOrNull()
+                    if (savedEventId != null) {
                         // 更新eventRoomId以便后续编辑
                         if (!isEditMode && eventRoomId == null) {
                             eventRoomId = savedEventId
                         }
-                        
+                        // 同步持久化事件UID，便于后续通过UID反查Room主键，避免重复插入
+                        if (loadedEventUid.isNullOrBlank()) {
+                            try {
+                                val savedUid = viewModel.getEventUidById(savedEventId)
+                                if (!savedUid.isNullOrBlank()) {
+                                    loadedEventUid = savedUid
+                                }
+                            } catch (e: Exception) {
+                                Log.w("EventFormScreen", "Failed to resolve UID for saved eventId=$savedEventId: ${e.message}")
+                            }
+                        }
+
                         // 更新初始状态，避免重复保存
                         if (riskResultChanged) {
                             initialRiskResult = riskResult
                         }
                         if (digitalAssetsChanged) {
-                            initialDigitalAssetFileIds = currentSelectedStorageFileIds
+                            initialDigitalAssetFileIds = effectiveCurrentFileIds
                         }
-                        
-                        Log.d("EventFormScreen", "Auto-saved event due to risk/assets change: savedEventId=$savedEventId, riskLevel=${riskResult?.level}, assetsCount=${currentSelectedStorageFileIds.size}")
-                    }.onFailure { e ->
-                        Log.e("EventFormScreen", "Failed to auto-save event due to risk/assets change: ${e.message}", e)
+
+                        Log.d("EventFormScreen", "Auto-saved event due to risk/assets change: savedEventId=$savedEventId, riskLevel=${riskResult?.level}, assetsCount=${effectiveCurrentFileIds.size}")
+                    } else {
+                        val e = result.exceptionOrNull()
+                        if (e != null) {
+                            Log.e("EventFormScreen", "Failed to auto-save event due to risk/assets change: ${e.message}", e)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e("EventFormScreen", "Exception during auto-save due to risk/assets change: ${e.message}", e)
+                } finally {
+                    isAutoSaving = false
                 }
             } else {
                 Log.d("EventFormScreen", "Skipped auto-save: no content to save (riskChanged=$riskResultChanged, assetsChanged=$digitalAssetsChanged)")
@@ -325,28 +498,75 @@ import com.google.gson.Gson
     }
     
     // 新增：页面离开时自动保存逻辑
+    // 函数级注释：
+    // - 目的：确保即使仅数字资产发生变化（其他字段为空），也能在页面退出时自动保存。
+    // - 关键修复：补充“数字资产非空”进入条件；并强化事件ID解析（支持数值ID与UID）。
     DisposableEffect(Unit) {
         onDispose {
-            // 页面离开时，如果有非空数据且未被删除则检查是否需要自动保�?
-            if (!isDeleted && (location.isNotBlank() || description.isNotBlank() || photoFiles.isNotEmpty() || audioFiles.isNotEmpty() || riskResult != null)) {
-                // 检测数据是否发生变�?
+            // 页面离开时，如果有非空数据且未被删除则检查是否需要自动保存
+            // 修复：补充数字资产非空判断（currentSelectedStorageFileIds 或 lastNonEmptySelectedStorageFileIds）
+            val hasAnyContentOnExit =
+                location.isNotBlank() ||
+                description.isNotBlank() ||
+                photoFiles.isNotEmpty() ||
+                audioFiles.isNotEmpty() ||
+                riskResult != null ||
+                currentSelectedStorageFileIds.isNotEmpty() ||
+                lastNonEmptySelectedStorageFileIds.isNotEmpty() ||
+                currentSelectedStorageNodeIds.isNotEmpty() ||
+                lastNonEmptySelectedStorageNodeIds.isNotEmpty()
+
+            if (!isDeleted && hasAnyContentOnExit) {
+                // 检测数据是否发生变化
+                // 修复：数字资产变更基于“有效 fileIds”检测（优先 current fileIds，其次 lastNonEmpty 映射结果）
+                val effectiveComparisonAssetIds: List<String> = if (currentSelectedStorageFileIds.isNotEmpty()) {
+                    currentSelectedStorageFileIds
+                } else {
+                    lastNonEmptySelectedStorageFileIds
+                }
                 val hasDataChanged = location != initialLocation ||
                     description != initialDescription ||
                     photoFiles.map { it.absolutePath } != initialPhotoFiles.map { it.absolutePath } ||
                     audioFiles.map { it.absolutePath } != initialAudioFiles.map { it.absolutePath } ||
                     riskResult != initialRiskResult ||
                     selectedDefects.toList() != initialSelectedDefects ||
-                        currentSelectedStorageFileIds != initialDigitalAssetFileIds // 修改：使用currentSelectedStorageFileIds进行变化检�?
+                    effectiveComparisonAssetIds != initialDigitalAssetFileIds
                 
                 // 只有在数据确实发生变化时才进行自动保�?
                 if (hasDataChanged) {
-                    // 使用runBlocking确保在页面销毁前完成保存
-                    runBlocking {
-                        try {
-                            // 判断是新建还是编辑模�?
-                            val isEditMode = eventId.isNotBlank()
-                            val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
-                            
+                    if (isAutoSaving) {
+                        Log.d("EventFormScreen", "Skip page-exit auto-save: save already in progress")
+                    } else {
+                        isAutoSaving = true
+                        // 使用runBlocking确保在页面销毁前完成保存
+                        runBlocking {
+                            try {
+                                // 修复关键逻辑：
+                                // 1) 优先解析传入的eventId为数值主键；若不是数值则按UID反查Room主键；
+                                // 2) 回退到已加载的eventRoomId，确保编辑模式更新而非插入。
+                                val resolvedEventId: Long? = eventId.toLongOrNull() ?: try {
+                                    viewModel.getEventRoomIdByUid(eventId)
+                                } catch (_: Exception) { null }
+                                val fromLoadedUid: Long? = if (!loadedEventUid.isNullOrBlank()) try {
+                                    viewModel.getEventRoomIdByUid(loadedEventUid!!)
+                                } catch (_: Exception) { null } else null
+                                val existingEventId = resolvedEventId ?: fromLoadedUid ?: eventRoomId
+                                val isEditMode = existingEventId != null && existingEventId > 0
+                                val currentEventId = existingEventId
+
+                            // 计算页面退出时的有效资产 fileIds：优先 current fileIds，其次 nodeIds→fileIds 映射，再回退 lastNonEmpty
+                            val effectiveAssetFileIds: List<String> = when {
+                                currentSelectedStorageFileIds.isNotEmpty() -> currentSelectedStorageFileIds
+                                currentSelectedStorageNodeIds.isNotEmpty() -> try {
+                                    viewModel.getFileIdsByNodeIds(currentSelectedStorageNodeIds)
+                                } catch (_: Exception) { lastNonEmptySelectedStorageFileIds }
+                                lastNonEmptySelectedStorageFileIds.isNotEmpty() -> lastNonEmptySelectedStorageFileIds
+                                lastNonEmptySelectedStorageNodeIds.isNotEmpty() -> try {
+                                    viewModel.getFileIdsByNodeIds(lastNonEmptySelectedStorageNodeIds)
+                                } catch (_: Exception) { emptyList() }
+                                else -> emptyList()
+                            }
+
                             val result = viewModel.saveEventToRoom(
                                 projectName = projectName,
                                 location = location,
@@ -357,21 +577,45 @@ import com.google.gson.Gson
                                 photoFiles = photoFiles,
                                 audioFiles = audioFiles,
                                 selectedDefects = selectedDefects.toList(),
-                                digitalAssetFileIds = currentSelectedStorageFileIds, // 修改：使用currentSelectedStorageFileIds传递数字资产file_id列表
+                                // 修复：页面退出时数字资产参数采用有效 fileIds
+                                digitalAssetFileIds = effectiveAssetFileIds,
                                 structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
                             )
                             
-                            result.onSuccess { savedEventId ->
+                            val savedEventId = result.getOrNull()
+                            if (savedEventId != null) {
                                 Log.d("EventFormScreen", "Auto-saved event on page exit (data changed): projectName=$projectName, location=$location, descLen=${description.length}, isEditMode=$isEditMode, savedEventId=$savedEventId")
-                            }.onFailure { e ->
-                                Log.e("EventFormScreen", "Failed to auto-save event on page exit: ${e.message}", e)
+                                if (!isEditMode && eventRoomId == null) {
+                                    eventRoomId = savedEventId
+                                }
+                                // 同步持久化事件UID
+                                if (loadedEventUid.isNullOrBlank()) {
+                                    try {
+                                        val savedUid = viewModel.getEventUidById(savedEventId)
+                                        if (!savedUid.isNullOrBlank()) {
+                                            loadedEventUid = savedUid
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.w("EventFormScreen", "Failed to resolve UID on page exit for saved eventId=$savedEventId: ${e.message}")
+                                    }
+                                }
+                            } else {
+                                val e = result.exceptionOrNull()
+                                if (e != null) {
+                                    Log.e("EventFormScreen", "Failed to auto-save event on page exit: ${e.message}", e)
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e("EventFormScreen", "Exception during auto-save on page exit: ${e.message}", e)
                         }
+                        }
+                        isAutoSaving = false
                     }
                 } else {
-                    Log.d("EventFormScreen", "Skipped auto-save on page exit: no data changes detected")
+                    Log.d(
+                        "EventFormScreen",
+                        "Skipped auto-save on page exit: no data changes detected (assetsCurrent=${currentSelectedStorageFileIds.size}, assetsLastNonEmpty=${lastNonEmptySelectedStorageFileIds.size})"
+                    )
                 }
             }
         }
@@ -426,23 +670,30 @@ import com.google.gson.Gson
         }
     }
 
-    // 进入时如果有 eventId，则从数据库加载事件数据并回�?
+    // 进入时如果有 eventId，则从数据库加载事件数据并回显
+    // 函数级注释：
+    // - 目的：修复仅携带事件UID（字符串）时无法从Room加载，导致数字资产不回显的问题。
+    // - 策略：优先将UID解析为Room主键（event_id），若解析失败再回退到本地meta.json。
+    // - 影响：确保更新后的 assets 字段从数据库正确回显，避免依赖可能未更新的 meta.json。
     LaunchedEffect(eventId) {
         if (eventId.isNotBlank()) {
-            // 首先尝试从数据库加载事件数据
-            val eventIdLong = eventId.toLongOrNull()
-            if (eventIdLong != null) {
-                val result = viewModel.loadEventFromRoom(eventIdLong)
-                result.onSuccess { eventEntity: EventEntity? ->
-                    if (eventEntity != null) {
+            // 首先解析事件主键：优先用数值ID，其次用UID查询Room主键
+            val resolvedEventId: Long? = eventId.toLongOrNull() ?: try {
+                viewModel.getEventRoomIdByUid(eventId)
+            } catch (_: Exception) { null }
+            if (resolvedEventId != null) {
+                val result = viewModel.loadEventFromRoom(resolvedEventId)
+                val eventEntity: EventEntity? = result.getOrNull()
+                if (eventEntity != null) {
                         // 从数据库加载的数据回显到UI
                         location = eventEntity.location ?: ""
                         description = eventEntity.content
                         eventRoomId = eventEntity.eventId
                         loadedEventUid = eventEntity.uid // 存储事件UID
                         
-                        // 回显风险评估结果（兼容 answers 数组与 assessmentData 对象两种格式）
-                        if (eventEntity.riskLevel != null && eventEntity.riskScore != null) {
+                        // 回显风险评估结果：不再依赖 riskLevel/riskScore 是否存在，只要 risk_answers 可解析即进行回显
+                        // 文件级注释：该段逻辑用于将数据库中的 risk_answers 解析为弹窗所需的 initialAnswers/initialAssessmentData。
+                        runCatching {
                             val gson = com.google.gson.Gson()
                             var parsedAnswers: List<RiskAnswer>? = null
                             var parsedAssessmentData: RiskAssessmentData? = null
@@ -450,7 +701,7 @@ import com.google.gson.Gson
                                 // 优先尝试解析为新的对象格式 RiskAssessmentData
                                 parsedAssessmentData = try {
                                     gson.fromJson(answersJson, RiskAssessmentData::class.java)
-                                } catch (e: Exception) {
+                                } catch (_: Exception) {
                                     null
                                 }
                                 // 如果不是对象格式，则尝试解析为旧的数组格式 List<RiskAnswer>
@@ -464,30 +715,52 @@ import com.google.gson.Gson
                                     }
                                 }
                             }
-                            riskResult = RiskAssessmentResult(
-                                level = eventEntity.riskLevel!!,
-                                score = eventEntity.riskScore!!,
-                                answers = parsedAnswers,
-                                assessmentData = parsedAssessmentData
-                            )
-                        }
-                        
-                        // 回显图片文件
-                        photoFiles.clear()
-                        eventEntity.photoFiles.forEach { photoPath ->
-                            val photoFile = File(photoPath)
-                            if (photoFile.exists()) {
-                                photoFiles.add(photoFile)
+
+                            // 若解析到任一格式，即构造 riskResult，level/score 若为空使用兜底值或对象内字段
+                            if (parsedAnswers != null || parsedAssessmentData != null) {
+                                val level = eventEntity.riskLevel
+                                    ?: parsedAssessmentData?.risk_rating
+                                    ?: ""
+                                val score = eventEntity.riskScore ?: 0.0
+                                riskResult = RiskAssessmentResult(
+                                    level = level,
+                                    score = score,
+                                    answers = parsedAnswers,
+                                    assessmentData = parsedAssessmentData
+                                )
                             }
                         }
                         
-                        // 回显音频文件
-                        audioFiles.clear()
-                        eventEntity.audioFiles.forEach { audioPath ->
-                            val audioFile = File(audioPath)
-                            if (audioFile.exists()) {
-                                audioFiles.add(audioFile)
+                        // 回显图片文件（非破坏性合并）
+                        // 函数级注释：
+                        // - 目的：避免在选择数字资产返回后，已有本地拍照内容被清空。
+                        // - 策略：不清空 photoFiles，而是合并数据库中已有的路径，保持已拍摄内容。
+                        runCatching {
+                            val existingPhotoPaths = photoFiles.map { it.absolutePath }.toMutableSet()
+                            eventEntity.photoFiles.forEach { photoPath ->
+                                val photoFile = File(photoPath)
+                                if (photoFile.exists() && existingPhotoPaths.add(photoFile.absolutePath)) {
+                                    photoFiles.add(photoFile)
+                                }
                             }
+                        }.onFailure { e ->
+                            Log.w("EventFormScreen", "Failed to merge photo files: ${e.message}")
+                        }
+
+                        // 回显音频文件（非破坏性合并）
+                        // 函数级注释：
+                        // - 目的：避免在选择数字资产返回后，已有本地录音内容被清空。
+                        // - 策略：不清空 audioFiles，而是合并数据库中已有的路径，保持已录音内容。
+                        runCatching {
+                            val existingAudioPaths = audioFiles.map { it.absolutePath }.toMutableSet()
+                            eventEntity.audioFiles.forEach { audioPath ->
+                                val audioFile = File(audioPath)
+                                if (audioFile.exists() && existingAudioPaths.add(audioFile.absolutePath)) {
+                                    audioFiles.add(audioFile)
+                                }
+                            }
+                        }.onFailure { e ->
+                            Log.w("EventFormScreen", "Failed to merge audio files: ${e.message}")
                         }
                         
                         // 回显 Structural Defect Details
@@ -502,22 +775,41 @@ import com.google.gson.Gson
                             }
                         }
                         
-                        // 回显数字资产选择 - 从新的assets字段中提取file_id和文件名
-                        val assetFileIds = eventEntity.assets.map { it.fileId }
+                        // 回显数字资产选择 - 优先使用 nodeId，然后映射为 fileId 加载详情与文件名
+                        val assetNodeIds = eventEntity.assets.mapNotNull { it.nodeId }
                         val assetFileNames = eventEntity.assets.map { it.fileName }
-                        
-                        android.util.Log.d("EventFormScreen", "Loading event assets - fileIds: ${assetFileIds.joinToString()}")
-                        android.util.Log.d("EventFormScreen", "Loading event assets - fileNames: ${assetFileNames.joinToString()}")
-                        
-                        currentSelectedStorageFileIds = assetFileIds
-                        // 获取数字资产详细信息
-                        val assetDetails = viewModel.getDigitalAssetDetailsByIds(assetFileIds)
-                        digitalAssetDetails = assetDetails
-                        digitalAssetFileNames = assetFileNames
-                        
-                        // 设置数字资产初始状态（参考风险矩阵模式）
-                        initialDigitalAssetFileIds = assetFileIds
-                        Log.d("EventFormScreen", "Restored digital assets: ${eventEntity.assets.size} files")
+                        if (assetNodeIds.isNotEmpty()) {
+                            android.util.Log.d("EventFormScreen", "Loading event assets - nodeIds: ${assetNodeIds.joinToString()}")
+                            currentSelectedStorageNodeIds = assetNodeIds
+                            lastNonEmptySelectedStorageNodeIds = assetNodeIds
+                            // 将 nodeId 映射为 fileId 并加载详情
+                            val mappedFileIds = try { viewModel.getFileIdsByNodeIds(assetNodeIds) } catch (_: Exception) { emptyList<String>() }
+                            if (mappedFileIds.isNotEmpty()) {
+                                currentSelectedStorageFileIds = mappedFileIds
+                                lastNonEmptySelectedStorageFileIds = mappedFileIds
+                                val assetDetails = viewModel.getDigitalAssetDetailsByIds(mappedFileIds)
+                                digitalAssetDetails = assetDetails
+                                digitalAssetFileNames = assetFileNames
+                                initialDigitalAssetFileIds = mappedFileIds
+                            } else {
+                                // Fallback：无法映射fileId时直接用 nodeId 加载基础详情，保持原有fileId状态不变
+                                digitalAssetDetails = viewModel.getDigitalAssetDetailsByNodeIds(assetNodeIds)
+                                digitalAssetFileNames = assetNodeIds
+                                initialDigitalAssetFileIds = currentSelectedStorageFileIds
+                            }
+                        } else {
+                            // 兼容旧数据：无nodeId时使用 fileId 回显
+                            val assetFileIds = eventEntity.assets.map { it.fileId }
+                            android.util.Log.d("EventFormScreen", "Loading event assets - fileIds: ${assetFileIds.joinToString()}")
+                            android.util.Log.d("EventFormScreen", "Loading event assets - fileNames: ${assetFileNames.joinToString()}")
+                            currentSelectedStorageFileIds = assetFileIds
+                            val assetDetails = viewModel.getDigitalAssetDetailsByIds(assetFileIds)
+                            digitalAssetDetails = assetDetails
+                            digitalAssetFileNames = assetFileNames
+                            lastNonEmptySelectedStorageFileIds = assetFileIds
+                            initialDigitalAssetFileIds = assetFileIds
+                        }
+                        Log.d("EventFormScreen", "Restored digital assets: ${eventEntity.assets.size} items (nodeIds=${assetNodeIds.size})")
                         
                         // 加载关联的缺陷信息（支持 defectIds / defectNos / defectUids）
                         if (eventEntity.defectIds.isNotEmpty() || eventEntity.defectNos.isNotEmpty() || eventEntity.defectUids.isNotEmpty()) {
@@ -530,18 +822,18 @@ import com.google.gson.Gson
                             scope.launch {
                                 try {
                                     val defects = mutableListOf<DefectEntity>()
-                                    
-                                    // 通过defectIds加载缺陷
-                                    defectIds.forEach { defectId: Long ->
+
+                                    // 通过 defectIds 加载缺陷（使用常规 for 循环以支持 suspend 调用）
+                                    for (defectId: Long in defectIds) {
                                         val defect = viewModel.getDefectById(defectId)
                                         defect?.let { d: DefectEntity ->
                                             defects.add(d)
                                         }
                                     }
-                                    
-                                    // 通过defectNos加载缺陷（如果有projectUid�?
+
+                                    // 通过 defectNos 加载缺陷（如果有 projectUid）
                                     if (projectUid.isNotBlank()) {
-                                        defectNos.forEach { defectNo: String ->
+                                        for (defectNo: String in defectNos) {
                                             val defect = viewModel.getDefectByProjectUidAndDefectNo(projectUid, defectNo)
                                             defect?.let { d: DefectEntity ->
                                                 if (!defects.any { existingDefect -> existingDefect.defectId == d.defectId }) {
@@ -552,7 +844,7 @@ import com.google.gson.Gson
                                     }
 
                                     // 通过 defectUids 加载缺陷
-                                    defectUids.forEach { uid: String ->
+                                    for (uid: String in defectUids) {
                                         val defect = if (projectUid.isNotBlank()) {
                                             viewModel.getDefectByProjectUidAndUid(projectUid, uid)
                                         } else {
@@ -564,7 +856,7 @@ import com.google.gson.Gson
                                             }
                                         }
                                     }
-                                    
+
                                     selectedDefects.clear()
                                     selectedDefects.addAll(defects)
                                 } catch (e: Exception) {
@@ -573,7 +865,7 @@ import com.google.gson.Gson
                             }
                         }
                         
-                        Log.d("EventFormScreen", "Loaded complete event from database: eventId=$eventIdLong, location=$location, " +
+                        Log.d("EventFormScreen", "Loaded complete event from database: eventId=$resolvedEventId, location=$location, " +
                             "descLen=${description.length}, riskLevel=${eventEntity.riskLevel}, photoCount=${photoFiles.size}, audioCount=${audioFiles.size}, " +
                             "digitalAssetCount=${eventEntity.assets.size}")
                         
@@ -584,10 +876,10 @@ import com.google.gson.Gson
                         initialAudioFiles = audioFiles.toList()
                         initialRiskResult = riskResult
                         initialSelectedDefects = selectedDefects.toList()
-                        initialDigitalAssetFileIds = eventEntity.assets.map { it.fileId } // 新增：设置数字资产初始状�?
-                    }
-                }.onFailure { e: Throwable ->
-                    Log.e("EventFormScreen", "Failed to load event from database: ${e.message}", e)
+                        initialDigitalAssetFileIds = eventEntity.assets.map { it.fileId } // 新增：设置数字资产初始状态
+                } else {
+                    val e = result.exceptionOrNull()
+                    Log.e("EventFormScreen", "Failed to load event from database: ${e?.message}", e)
                 }
             }
             
@@ -653,7 +945,8 @@ import com.google.gson.Gson
                                 }
                             }
 
-                            if (level.isNotBlank()) {
+                            // 兼容：只要 answers 存在（对象或数组），即构建 riskResult 以便弹窗回显；level 可为空
+                            if (parsedAnswers != null || parsedAssessmentData != null || level.isNotBlank()) {
                                 riskResult = RiskAssessmentResult(
                                     level = level,
                                     score = score,
@@ -691,18 +984,31 @@ import com.google.gson.Gson
                         }
                     }
                     
-                    // 如果数据库中没有数字资产，则从meta.json中读�?
+                    // 如果数据库中没有数字资产，则从meta.json中读取（兼容 assets 对象数组与 digitalAssets 字符串数组）
                     if (currentSelectedStorageFileIds.isEmpty()) {
-                        val digitalAssets = obj.optJSONArray("digitalAssets")
-                        if (digitalAssets != null) {
-                            val fileIds = mutableListOf<String>()
-                            for (i in 0 until digitalAssets.length()) {
-                                val fileId = digitalAssets.optString(i)
-                                if (fileId.isNotBlank()) {
-                                    fileIds.add(fileId)
+                        val fileIds = mutableListOf<String>()
+                        // 先尝试读取对象数组 assets：[{"fileId":"...","fileName":"..."}, ...]
+                        val assetsArr = obj.optJSONArray("assets")
+                        if (assetsArr != null) {
+                            for (i in 0 until assetsArr.length()) {
+                                val item = assetsArr.optJSONObject(i)
+                                val fid = item?.optString("fileId") ?: ""
+                                if (fid.isNotBlank()) fileIds.add(fid)
+                            }
+                        }
+                        // 若未读取到，则回退读取 digitalAssets：["fid1","fid2",...]
+                        if (fileIds.isEmpty()) {
+                            val digitalAssets = obj.optJSONArray("digitalAssets")
+                            if (digitalAssets != null) {
+                                for (i in 0 until digitalAssets.length()) {
+                                    val fileId = digitalAssets.optString(i)
+                                    if (fileId.isNotBlank()) fileIds.add(fileId)
                                 }
                             }
+                        }
+                        if (fileIds.isNotEmpty()) {
                             currentSelectedStorageFileIds = fileIds
+                            lastNonEmptySelectedStorageFileIds = fileIds
                         }
                     }
                     
@@ -738,14 +1044,24 @@ import com.google.gson.Gson
                 }
             }
             
-            // 数据加载完成后，更新初始状态用于后续变化检�?
+            // 数据加载完成后，更新初始状态用于后续变化检测
             initialLocation = location
             initialDescription = description
             initialPhotoFiles = photoFiles.toList()
             initialAudioFiles = audioFiles.toList()
             initialRiskResult = riskResult
             initialSelectedDefects = selectedDefects.toList()
-            initialDigitalAssetFileIds = currentSelectedStorageFileIds // 修改：使用currentSelectedStorageFileIds设置数字资产初始状�?
+            // 修复：不要用“当前选择”覆盖初始资产，否则资产选择后被误判为无变化
+            // 仅当初始资产尚未设置（例如新建态且数据库未加载资产）时，保持为空或沿用更早在数据库加载逻辑处设置的值
+            // 在上方事件读取（eventEntity）逻辑中，若已存在资产，会将 initialDigitalAssetFileIds 设置为数据库中的资产文件ID
+            // 这里不再覆盖，避免影响变更检测（确保仅资产变更也能触发保存）
+            if (initialDigitalAssetFileIds.isEmpty()) {
+                // 保持为空，等待后续选择触发变更保存；不主动用 currentSelectedStorageFileIds 覆盖
+            }
+            // 同步最后一次非空选择（兜底保存）
+            if (lastNonEmptySelectedStorageFileIds.isEmpty() && currentSelectedStorageFileIds.isNotEmpty()) {
+                lastNonEmptySelectedStorageFileIds = currentSelectedStorageFileIds
+            }
         }
     }
 
@@ -812,6 +1128,8 @@ import com.google.gson.Gson
     var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
     // 录音音量级别�?f..1f），用于驱动底部波浪动画
     var voiceLevel by remember { mutableStateOf(0f) }
+    // 底部录音弹窗显示状态
+    var showAudioRecordSheet by remember { mutableStateOf(false) }
 
     /**
      * 开始录�?
@@ -955,16 +1273,251 @@ import com.google.gson.Gson
         handleBackPress()
     }
 
-    Scaffold { paddingValues ->
+    Scaffold(
+        topBar = {
+            com.simsapp.ui.common.AppTopBar(
+                title = "Event",
+                onBack = { handleBackPress() },
+                containerColor = Color.White,
+                titleColor = Color(0xFF1C1C1E),
+                navigationIconColor = Color(0xFF1C1C1E)
+            )
+        },
+        bottomBar = {
+            androidx.compose.material3.Surface(
+                color = Color.White,
+                tonalElevation = 0.dp,
+                shadowElevation = 6.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .windowInsetsPadding(WindowInsets.navigationBars),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Delete（左侧）：仅编辑模式显示
+                    if (eventId.isNotBlank() && eventId != "0") {
+                        TextButton(
+                            onClick = { showDeleteDialog = true },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("Delete")
+                        }
+                    } else {
+                        Spacer(Modifier.width(1.dp))
+                    }
+
+                    // Sync（中间）：保持原逻辑，文本按钮样式
+                    TextButton(
+                        onClick = {
+                            if (isSaving) return@TextButton
+                            if (notFinishedProjects.isNotEmpty()) {
+                                showProjectPicker = true
+                            } else {
+                                scope.launch {
+                                    // 1) 计算当前 UID（可能为空）
+                                    var finalUid: String = run {
+                                        if (eventId.isNotBlank()) {
+                                            val asLong = eventId.toLongOrNull()
+                                            if (asLong != null) {
+                                                viewModel.getEventUidById(asLong) ?: (loadedEventUid ?: "")
+                                            } else {
+                                                eventId
+                                            }
+                                        } else {
+                                            loadedEventUid ?: ""
+                                        }
+                                    }
+
+                                    // 2) 上传前，先进行本地保存（生成 UID/RoomId，并落地最新数据）
+                                    isSaving = true
+                                    // 2.1 计算有效的数字资产 fileIds（优先已选 fileIds，其次 nodeIds 映射，否则空）
+                                    val effectiveAssetFileIds: List<String> = when {
+                                        currentSelectedStorageFileIds.isNotEmpty() -> currentSelectedStorageFileIds
+                                        currentSelectedStorageNodeIds.isNotEmpty() -> {
+                                            try {
+                                                viewModel.getFileIdsByNodeIds(currentSelectedStorageNodeIds)
+                                            } catch (_: Exception) { emptyList() }
+                                        }
+                                        else -> emptyList()
+                                    }
+
+                                    // 2.2 保存逻辑：若没有 UID，则当作新建保存；否则按编辑更新保存
+                                    val saveResult: Result<Long> = run {
+                                        if (finalUid.isBlank()) {
+                                            viewModel.saveEventToRoom(
+                                                projectName = projectName,
+                                                location = location,
+                                                description = description,
+                                                riskResult = riskResult,
+                                                photoFiles = photoFiles,
+                                                audioFiles = audioFiles,
+                                                selectedDefects = selectedDefects,
+                                                digitalAssetFileIds = effectiveAssetFileIds,
+                                                isEditMode = false,
+                                                currentEventId = null,
+                                                structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
+                                            )
+                                        } else {
+                                            val existingId = viewModel.getEventRoomIdByUid(finalUid) ?: eventRoomId
+                                            viewModel.saveEventToRoom(
+                                                projectName = projectName,
+                                                location = location,
+                                                description = description,
+                                                riskResult = riskResult,
+                                                photoFiles = photoFiles,
+                                                audioFiles = audioFiles,
+                                                selectedDefects = selectedDefects,
+                                                digitalAssetFileIds = effectiveAssetFileIds,
+                                                isEditMode = existingId != null,
+                                                currentEventId = existingId,
+                                                structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
+                                            )
+                                        }
+                                    }
+
+                                    if (saveResult.isFailure) {
+                                        isSaving = false
+                                        Toast.makeText(context, saveResult.exceptionOrNull()?.message ?: "Local save failed", Toast.LENGTH_LONG).show()
+                                        return@launch
+                                    }
+
+                                    // 2.3 若之前没有 UID，则从刚保存的 RoomId 反查并缓存 UID
+                                    if (finalUid.isBlank()) {
+                                        // 更新本地缓存的 eventRoomId 与 loadedEventUid
+                                        val savedId = saveResult.getOrNull() ?: -1L
+                                        if (savedId > 0L) {
+                                            eventRoomId = savedId
+                                            val uid = viewModel.getEventUidById(savedId) ?: ""
+                                            if (uid.isNotBlank()) {
+                                                finalUid = uid
+                                                loadedEventUid = uid
+                                            }
+                                        }
+                                        if (finalUid.isBlank()) {
+                                            isSaving = false
+                                            Toast.makeText(context, "Failed to resolve UID after save", Toast.LENGTH_LONG).show()
+                                            return@launch
+                                        }
+                                    }
+
+                                    // 3) 执行同步上传（已确保本地保存完成）
+                                    val (ok, msg) = viewModel.uploadEventWithSyncRetry(
+                                        eventUid = finalUid,
+                                        projectName = projectName,
+                                        location = location,
+                                        description = description,
+                                        riskResult = riskResult,
+                                        photoFiles = photoFiles,
+                                        audioFiles = audioFiles,
+                                        selectedDefects = selectedDefects,
+                                        digitalAssetFileIds = effectiveAssetFileIds,
+                                        structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) },
+                                        maxRetries = 5,
+                                        delayMs = 3000
+                                    )
+                                    isSaving = false
+                                    if (ok) {
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        onBack()
+                                    } else {
+                                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isSaving
+                    ) {
+                        Text(if (isSaving) "Uploading..." else "Sync")
+                    }
+
+                    // Save（右侧）：执行本地保存/更新后再提示
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    // 计算有效的数字资产 fileIds（优先当前fileIds，其次nodeIds→fileIds映射）
+                                    val effectiveFileIds: List<String> = when {
+                                        currentSelectedStorageFileIds.isNotEmpty() -> currentSelectedStorageFileIds
+                                        currentSelectedStorageNodeIds.isNotEmpty() -> try {
+                                            viewModel.getFileIdsByNodeIds(currentSelectedStorageNodeIds)
+                                        } catch (_: Exception) { emptyList() }
+                                        else -> emptyList()
+                                    }
+
+                                    // 解析已存在的事件ID（优先UID→RoomID，其次已缓存的eventRoomId）
+                                    val idFromUid = when {
+                                        eventId.isNotBlank() -> viewModel.getEventRoomIdByUid(eventId)
+                                        !loadedEventUid.isNullOrBlank() -> viewModel.getEventRoomIdByUid(loadedEventUid!!)
+                                        else -> null
+                                    }
+                                    val existingEventId = idFromUid ?: eventRoomId
+                                    val isEditMode = existingEventId != null && existingEventId > 0
+                                    val currentEventId = existingEventId
+
+                                    val result = viewModel.saveEventToRoom(
+                                        projectName = projectName,
+                                        location = location,
+                                        description = description,
+                                        riskResult = riskResult,
+                                        photoFiles = photoFiles,
+                                        audioFiles = audioFiles,
+                                        selectedDefects = selectedDefects.toList(),
+                                        digitalAssetFileIds = effectiveFileIds,
+                                        isEditMode = isEditMode,
+                                        currentEventId = currentEventId,
+                                        structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
+                                    )
+
+                                    if (result.isSuccess) {
+                                        val savedEventId = result.getOrNull() ?: -1L
+                                        // 首次保存时，缓存Room主键ID以便后续更新
+                                        if (!isEditMode && eventRoomId == null && savedEventId > 0L) {
+                                            eventRoomId = savedEventId
+                                        }
+                                        // 同步持久化事件UID，避免重复插入
+                                        if (loadedEventUid.isNullOrBlank() && savedEventId > 0L) {
+                                            try {
+                                                val savedUid = viewModel.getEventUidById(savedEventId)
+                                                if (!savedUid.isNullOrBlank()) {
+                                                    loadedEventUid = savedUid
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.w("EventFormScreen", "Resolve UID failed for saved eventId=$savedEventId: ${e.message}")
+                                            }
+                                        }
+
+                                        Toast.makeText(context, "Saved successfully", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val err = result.exceptionOrNull()?.message ?: "Unknown error"
+                                        Toast.makeText(context, "Save failed: ${err}", Toast.LENGTH_LONG).show()
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Save failed: ${e.message}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF153E8B)
+                        ),
+                        shape = RoundedCornerShape(24.dp)
+                    ) {
+                        Text("Save", color = Color.White)
+                    }
+                }
+            }
+        }
+    ) { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color(0xFFEAF2FF), Color(0xFFF7FAFF))
-                    )
-                )
+                .background(Color(0xFFF7F8FA))
         ) {
             Column(
                 modifier = Modifier
@@ -972,273 +1525,302 @@ import com.google.gson.Gson
                     .padding(16.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                OutlinedTextField(
-                    value = location,
-                    onValueChange = { location = it },
-                    label = { Text("Location") },
-                    singleLine = true,
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(
-                        imeAction = ImeAction.Next,
-                        keyboardType = KeyboardType.Text
+                // 输入信息区：去掉“Event”标题，采用白色卡片+浅阴影，内置两行输入
+                androidx.compose.material3.Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = androidx.compose.material3.CardDefaults.cardColors(
+                        containerColor = Color.White
                     ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("Description") },
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(
-                        imeAction = ImeAction.Done,
-                        keyboardType = KeyboardType.Text
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    elevation = androidx.compose.material3.CardDefaults.cardElevation(
+                        defaultElevation = 2.dp
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Event Description",
+                            fontSize = 12.sp,
+                            color = Color(0xFF90A4AE)
+                        )
+                        androidx.compose.material3.TextField(
+                            value = description,
+                            onValueChange = { description = it },
+                            placeholder = { Text("Type here") },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = androidx.compose.material3.TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedPlaceholderColor = Color(0xFFB0BEC5),
+                                unfocusedPlaceholderColor = Color(0xFFB0BEC5)
+                            ),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(
+                                imeAction = ImeAction.Next,
+                                keyboardType = KeyboardType.Text
+                            )
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        androidx.compose.material3.HorizontalDivider(color = Color(0xFFE8EAED))
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "Location",
+                            fontSize = 12.sp,
+                            color = Color(0xFF90A4AE)
+                        )
+                        androidx.compose.material3.TextField(
+                            value = location,
+                            onValueChange = { location = it },
+                            placeholder = { Text("Type here") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = androidx.compose.material3.TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedPlaceholderColor = Color(0xFFB0BEC5),
+                                unfocusedPlaceholderColor = Color(0xFFB0BEC5)
+                            ),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions.Default.copy(
+                                imeAction = ImeAction.Done,
+                                keyboardType = KeyboardType.Text
+                            )
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        androidx.compose.material3.HorizontalDivider(color = Color(0xFFE8EAED))
+                    }
+                }
 
                 Spacer(Modifier.height(12.dp))
 
-                // 结构缺陷详情按钮
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { 
-                            val intent = StructuralDefectActivity.createIntent(context, structuralDefectResult)
-                            structuralDefectLauncher.launch(intent)
-                        },
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F9FA)),
-                    border = BorderStroke(1.dp, Color(0xFFE0E0E0))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Structural Defect Details",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFF1565C0)
-                            )
-                            if (structuralDefectResult != null) {
-                                Text(
-                                    text = "Details completed",
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF4CAF50)
-                                )
-                            } else {
-                                Text(
-                                    text = "Click to add structural defect details",
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF666666)
-                                )
-                            }
-                        }
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                // 结构缺陷详情区块（统一 SectionCard 样式，右侧箭头进入）
+                SectionCard(
+                    title = "Structural Defect Details",
+                    trailing = {
+                        HeaderActionButton(
+                            icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                             contentDescription = "Open Structural Defect Details",
                             tint = Color(0xFF666666)
-                        )
+                        ) {
+                            val intent = StructuralDefectActivity.createIntent(context, structuralDefectResult)
+                            structuralDefectLauncher.launch(intent)
+                        }
+                    }
+                ) {
+                    if (structuralDefectResult != null) {
+                        Text(text = "Details completed", fontSize = 12.sp, color = Color(0xFF4CAF50))
+                    } else {
+                        Text(text = "Click to add structural defect details", fontSize = 12.sp, color = Color(0xFF666666))
                     }
                 }
 
                 Spacer(Modifier.height(12.dp))
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                // 统一采用各区块右侧动作按钮，不再使用顶部图标行
+
+                // 风险分析区块：始终显示卡片，右侧为进入评估的箭头
+                SectionCard(
+                    title = "Risk Analysis",
+                    trailing = {
+                        HeaderActionButton(
+                            icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = "Open Risk Analysis",
+                            tint = Color(0xFF666666)
+                        ) { showRiskDialog = true }
+                    }
                 ) {
-                    // 风险评估图标：点击打开风险矩阵评估
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE3F2FD), CircleShape)
-                            .clickable { showRiskDialog = true },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // 自定义风险图标加大尺�?
-                        RiskAssessmentIcon(size = 36.dp)
-                    }
-                
-                    // 数据库图标：点击后进入“数据库文件展示区”的文件选择�?
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE3F2FD), CircleShape)
-                            .clickable { 
-                                projectUid?.let { uid ->
-                                    // 传递当前选中的数字资产fileId列表用于精确回显
-                                    android.util.Log.d("EventFormScreen", "打开数字资产选择页面，传递fileIds: ${currentSelectedStorageFileIds.joinToString()}")
-                                    onOpenStorage(uid, currentSelectedStorageFileIds)
-                                } ?: run {
-                                    Log.w("EventFormScreen", "ProjectUid not available for storage access")
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Storage,
-                            contentDescription = "Database",
-                            tint = Color(0xFF1565C0),
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                
-                    // 拍照图标：点击触发拍照，仅图标不显示文字
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFE3F2FD), CircleShape)
-                            .clickable {
-                                ensurePermissions(arrayOf(Manifest.permission.CAMERA)) { startTakePhoto() }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PhotoCamera,
-                            contentDescription = "Take Photo",
-                            tint = Color(0xFF1565C0),
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                
-                    // 录音图标：长按开始录音，松开停止；仅图标不显示文�?
-                    val micCircleModifier = Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(if (isRecording) Color(0xFFFFEBEE) else Color(0xFFE3F2FD), CircleShape)
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
-                                        permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
-                                        return@detectTapGestures
-                                    }
-                                    startRecording()
-                                    tryAwaitRelease()
-                                    if (isRecording) stopRecording()
-                                }
-                            )
-                        }
-                    Box(micCircleModifier, contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
-                            contentDescription = "Record",
-                            tint = if (isRecording) Color(0xFFB00020) else Color(0xFF1565C0),
-                            modifier = Modifier.size(36.dp)
-                        )
+                    if (riskResult != null) {
+                        // 使用绿色圆角胶囊样式展示评估结果
+                        RiskResultPill(result = riskResult!!, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        Text(text = "Tap to assess risk", fontSize = 13.sp, color = Color(0xFF90A4AE))
                     }
                 }
-
-                // 风险分析结果卡片
-                if (riskResult != null) {
-                    Card(
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                            Text(text = "Risk Analysis", fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.height(8.dp))
-                            RiskResultBar(result = riskResult!!, modifier = Modifier.fillMaxWidth())
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                }
-
-                // 数据库文件展示区卡片
-                Card(
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(text = "Database Files", fontWeight = FontWeight.SemiBold)
-                        HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
-                        if (digitalAssetDetails.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            DigitalAssetCategorizedDisplay(
-                                assets = digitalAssetDetails,
-                                onAssetClick = { asset ->
-                                    // 只有非RISK_MATRIX类型的资产才能预�?
-                                    if (asset.type != "RISK_MATRIX") {
-                                        previewAsset = asset
-                                        showAssetPreview = true
-                                    }
-                                }
-                            )
-                        } else {
-                            Spacer(Modifier.height(8.dp))
-                            Text(text = "No files selected", fontSize = 13.sp, color = Color(0xFF90A4AE))
-                        }
-                    }
-                }
-
                 Spacer(Modifier.height(12.dp))
 
-                // 拍照片展示区卡片
-                Card(
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                // 数据库文件展示区卡片（右侧 + 打开选择器）
+                SectionCard(
+                    title = "Database Files",
+                    trailing = {
+                        HeaderActionButton(
+                            icon = Icons.Default.Add,
+                            contentDescription = "Add Database Files"
+                        ) {
+                            projectUid?.let { uid ->
+                                android.util.Log.d("EventFormScreen", "打开数字资产选择页面，传递fileIds: ${currentSelectedStorageFileIds.joinToString()}")
+                                onOpenStorage(uid, currentSelectedStorageNodeIds, currentSelectedStorageFileIds)
+                            } ?: run {
+                                Toast.makeText(context, "ProjectUid not available", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(text = "Photo Gallery", fontWeight = FontWeight.SemiBold)
-                        HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
-                        if (photoFiles.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(photoFiles) { pf ->
-                                    PhotoThumb(
-                                        file = pf,
-                                        onClick = { largePhoto = pf },
-                                        onDelete = {
-                                            try { pf.delete() } catch (_: Exception) {}
-                                            photoFiles.remove(pf)
+                    if (digitalAssetDetails.isNotEmpty()) {
+                        DigitalAssetCategorizedDisplay(
+                            assets = digitalAssetDetails,
+                            onAssetClick = { asset ->
+                                if (asset.type != "RISK_MATRIX") {
+                                    previewAsset = asset
+                                    showAssetPreview = true
+                                }
+                            },
+                            onAssetDelete = { asset ->
+                                // Function: removeSelectedAsset
+                                // Purpose: Remove a selected digital asset from current event while preserving preview feature
+                                // Params: asset (DigitalAssetDetail)
+                                // Returns: none; updates state (fileIds/nodeIds/details)
+                                scope.launch {
+                                    try {
+                                        val updatedFileIds = currentSelectedStorageFileIds.filterNot { it == asset.fileId }
+                                        currentSelectedStorageFileIds = updatedFileIds
+                                        lastNonEmptySelectedStorageFileIds = updatedFileIds
+
+                                        // 精确移除对应 nodeId，避免误清空其他选择
+                                        val nodeIdToRemove: String? = try {
+                                            viewModel.projectDigitalAssetDao.getByFileId(asset.fileId)?.nodeId
+                                        } catch (_: Exception) { null }
+                                        if (!nodeIdToRemove.isNullOrBlank()) {
+                                            currentSelectedStorageNodeIds = currentSelectedStorageNodeIds.filterNot { it == nodeIdToRemove }
+                                            lastNonEmptySelectedStorageNodeIds = lastNonEmptySelectedStorageNodeIds.filterNot { it == nodeIdToRemove }
                                         }
-                                    )
+
+                                        // Refresh details and filenames
+                                        if (updatedFileIds.isNotEmpty()) {
+                                            digitalAssetDetails = viewModel.getDigitalAssetDetailsByIds(updatedFileIds)
+                                            digitalAssetFileNames = viewModel.getFileNamesByIds(updatedFileIds)
+                                        } else {
+                                            digitalAssetDetails = emptyList()
+                                            digitalAssetFileNames = emptyList()
+                                        }
+                                        Log.d("EventFormScreen", "Removed asset: fileId=${asset.fileId}; remaining=${updatedFileIds.size}")
+
+                                        // 新增：立即持久化保存，修复删除后本地缓存未更新问题
+                                        if (!isAutoSaving) {
+                                            isAutoSaving = true
+                                            try {
+                                                // 优先通过事件UID解析已存在的Room ID，确保更新而非插入
+                                                val idFromUid = when {
+                                                    eventId.isNotBlank() -> viewModel.getEventRoomIdByUid(eventId)
+                                                    !loadedEventUid.isNullOrBlank() -> viewModel.getEventRoomIdByUid(loadedEventUid!!)
+                                                    else -> null
+                                                }
+                                                val existingEventId = idFromUid ?: eventRoomId
+                                                val isEditMode = existingEventId != null && existingEventId > 0
+                                                val currentEventId = existingEventId
+
+                                                val result = viewModel.saveEventToRoom(
+                                                    projectName = projectName,
+                                                    location = location,
+                                                    description = description,
+                                                    currentEventId = currentEventId,
+                                                    isEditMode = isEditMode,
+                                                    riskResult = riskResult,
+                                                    photoFiles = photoFiles,
+                                                    audioFiles = audioFiles,
+                                                    selectedDefects = selectedDefects.toList(),
+                                                    digitalAssetFileIds = updatedFileIds,
+                                                    structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) },
+                                                    // 关键：当删除后列表为空时，明确要求清空资产
+                                                    forceClearAssets = updatedFileIds.isEmpty()
+                                                )
+
+                                                val savedEventId = result.getOrNull()
+                                                if (savedEventId != null) {
+                                                    Log.d("EventFormScreen", "Auto-saved after asset delete: savedEventId=$savedEventId, remainingAssets=${updatedFileIds.size}")
+                                                    if (!isEditMode && eventRoomId == null) {
+                                                        eventRoomId = savedEventId
+                                                    }
+                                                    // 同步持久化事件UID
+                                                    if (loadedEventUid.isNullOrBlank()) {
+                                                        try {
+                                                            val savedUid = viewModel.getEventUidById(savedEventId)
+                                                            if (!savedUid.isNullOrBlank()) {
+                                                                loadedEventUid = savedUid
+                                                            }
+                                                        } catch (e: Exception) {
+                                                            Log.w("EventFormScreen", "Resolve UID after asset delete failed: ${e.message}")
+                                                        }
+                                                    }
+                                                } else {
+                                                    val e = result.exceptionOrNull()
+                                                    if (e != null) Log.e("EventFormScreen", "Auto-save after asset delete failed: ${e.message}", e)
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.e("EventFormScreen", "Exception during auto-save after asset delete: ${e.message}", e)
+                                            } finally {
+                                                isAutoSaving = false
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e("EventFormScreen", "Failed to remove asset ${asset.fileId}: ${e.message}", e)
+                                    }
                                 }
                             }
-                        } else {
-                            Spacer(Modifier.height(8.dp))
-                            Text(text = "No photos taken", fontSize = 13.sp, color = Color(0xFF90A4AE))
-                        }
+                        )
+                    } else {
+                        Text(text = "No files selected", fontSize = 13.sp, color = Color(0xFF90A4AE))
                     }
                 }
 
                 Spacer(Modifier.height(12.dp))
 
-                // 录音文件展示区卡�?
-                Card(
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text(text = "Audio Files", fontWeight = FontWeight.SemiBold)
-                        HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
-                        if (audioFiles.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                audioFiles.forEach { af ->
-                                    AudioPlayerBar(file = af, onDelete = {
-                                        try { af.delete() } catch (_: Exception) {}
-                                        audioFiles.remove(af)
-                                    })
-                                }
-                            }
-                        } else {
-                            Spacer(Modifier.height(8.dp))
-                            Text(text = "No audio recorded", fontSize = 13.sp, color = Color(0xFF90A4AE))
+                // 拍照片展示区卡片（右侧 + 触发拍照）
+                SectionCard(
+                    title = "Photo Gallery",
+                    trailing = {
+                        HeaderActionButton(
+                            icon = Icons.Default.Add,
+                            contentDescription = "Add Photo"
+                        ) {
+                            ensurePermissions(arrayOf(Manifest.permission.CAMERA)) { startTakePhoto() }
                         }
+                    }
+                ) {
+                    if (photoFiles.isNotEmpty()) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(photoFiles) { pf ->
+                                PhotoThumb(
+                                    file = pf,
+                                    onClick = { largePhoto = pf },
+                                    onDelete = {
+                                        try { pf.delete() } catch (_: Exception) {}
+                                        photoFiles.remove(pf)
+                                    }
+                                )
+                            }
+                        }
+                    } else {
+                        Text(text = "No photos taken", fontSize = 13.sp, color = Color(0xFF90A4AE))
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // 录音文件展示区卡片（右侧 + 弹窗按住录音）
+                SectionCard(
+                    title = "Audio Files",
+                    trailing = {
+                        HeaderActionButton(
+                            icon = Icons.Default.Add,
+                            contentDescription = "Add Audio"
+                        ) {
+                            ensurePermissions(arrayOf(Manifest.permission.RECORD_AUDIO)) {
+                                showAudioRecordSheet = true
+                            }
+                        }
+                    }
+                ) {
+                    if (audioFiles.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            audioFiles.forEach { af ->
+                                AudioPlayerBar(file = af, onDelete = {
+                                    try { af.delete() } catch (_: Exception) {}
+                                    audioFiles.remove(af)
+                                })
+                            }
+                        }
+                    } else {
+                        Text(text = "No audio recorded", fontSize = 13.sp, color = Color(0xFF90A4AE))
                     }
                 }
 
@@ -1246,125 +1828,116 @@ import com.google.gson.Gson
                     LargePhotoDialog(file = largePhoto!!, onDismiss = { largePhoto = null })
                 }
 
+                // 底部录音弹窗：按住开始，松开结束，自动保存文件
+                if (showAudioRecordSheet) {
+                    AudioRecordBottomSheet(
+                        isRecording = isRecording,
+                        level = voiceLevel,
+                        onStart = { startRecording() },
+                        onStopAndDismiss = {
+                            try { stopRecording() } catch (_: Exception) {}
+                            showAudioRecordSheet = false
+                        },
+                        onDismiss = { showAudioRecordSheet = false }
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Associated Historical Defects Module - Moved to bottom above buttons
-                Card(
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                // 关联历史缺陷区块（右侧 + 打开选择对话框）
+                SectionCard(
+                    title = "Associated Historical Defects",
+                    trailing = {
+                        HeaderActionButton(
+                            icon = Icons.Default.Add,
+                            contentDescription = "Add Defect"
+                        ) { showDefectSelectionDialog = true }
+                    }
                 ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Associated Historical Defects",
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            IconButton(
-                                onClick = { showDefectSelectionDialog = true },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = "Add Defect",
-                                    tint = Color(0xFF1976D2),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        
-                        if (selectedDefects.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                selectedDefects.forEach { defect ->
-                                    DefectInfoCard(
-                                        defect = defect,
-                                        onDefectClick = { defectEntity ->
-                                            onOpenDefect?.invoke(defectEntity)
+                    if (selectedDefects.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            selectedDefects.forEach { defect ->
+                                DefectInfoCard(
+                                    defect = defect,
+                                    onDefectClick = { defectEntity -> onOpenDefect?.invoke(defectEntity) },
+                                    // 优化：不显示图片，右侧提供删除按钮
+                                    showImages = false,
+                                    onDeleteClick = {
+                                        // 从已选列表移除，并触发持久化保存
+                                        selectedDefects.removeAll { it.defectId == defect.defectId }
+                                        scope.launch {
+                                            if (isAutoSaving) return@launch
+                                            isAutoSaving = true
+                                            try {
+                                                val idFromUid = when {
+                                                    eventId.isNotBlank() -> viewModel.getEventRoomIdByUid(eventId)
+                                                    !loadedEventUid.isNullOrBlank() -> viewModel.getEventRoomIdByUid(loadedEventUid!!)
+                                                    else -> null
+                                                }
+                                                val existingEventId = idFromUid ?: eventRoomId
+                                                val isEditMode = existingEventId != null && existingEventId > 0
+                                                val currentEventId = existingEventId
+
+                                                // 计算有效的数字资产 fileIds：优先 current，其次 nodeIds→fileIds 映射，最后回退 lastNonEmpty
+                                                val effectiveAssetFileIds: List<String> = when {
+                                                    currentSelectedStorageFileIds.isNotEmpty() -> currentSelectedStorageFileIds
+                                                    currentSelectedStorageNodeIds.isNotEmpty() -> try {
+                                                        viewModel.getFileIdsByNodeIds(currentSelectedStorageNodeIds)
+                                                    } catch (_: Exception) { lastNonEmptySelectedStorageFileIds }
+                                                    lastNonEmptySelectedStorageFileIds.isNotEmpty() -> lastNonEmptySelectedStorageFileIds
+                                                    lastNonEmptySelectedStorageNodeIds.isNotEmpty() -> try {
+                                                        viewModel.getFileIdsByNodeIds(lastNonEmptySelectedStorageNodeIds)
+                                                    } catch (_: Exception) { emptyList() }
+                                                    else -> emptyList()
+                                                }
+
+                                                val result = viewModel.saveEventToRoom(
+                                                    projectName = projectName,
+                                                    location = location,
+                                                    description = description,
+                                                    currentEventId = currentEventId,
+                                                    isEditMode = isEditMode,
+                                                    riskResult = riskResult,
+                                                    photoFiles = photoFiles,
+                                                    audioFiles = audioFiles,
+                                                    selectedDefects = selectedDefects.toList(),
+                                                    digitalAssetFileIds = effectiveAssetFileIds,
+                                                    structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) },
+                                                    forceClearAssets = effectiveAssetFileIds.isEmpty() && digitalAssetDetails.isEmpty()
+                                                )
+                                                val savedEventId = result.getOrNull()
+                                                if (savedEventId != null) {
+                                                    Log.d("EventFormScreen", "Auto-saved after defect delete: savedEventId=$savedEventId, defectCount=${selectedDefects.size}")
+                                                    if (!isEditMode && eventRoomId == null) eventRoomId = savedEventId
+                                                    if (loadedEventUid.isNullOrBlank()) {
+                                                        try {
+                                                            val savedUid = viewModel.getEventUidById(savedEventId)
+                                                            if (!savedUid.isNullOrBlank()) loadedEventUid = savedUid
+                                                        } catch (e: Exception) {
+                                                            Log.w("EventFormScreen", "Resolve UID after defect delete failed: ${e.message}")
+                                                        }
+                                                    }
+                                                } else {
+                                                    val e = result.exceptionOrNull()
+                                                    if (e != null) Log.e("EventFormScreen", "Auto-save after defect delete failed: ${e.message}", e)
+                                                }
+                                            } catch (e: Exception) {
+                                                Log.e("EventFormScreen", "Exception during auto-save after defect delete: ${e.message}", e)
+                                            } finally {
+                                                isAutoSaving = false
+                                            }
                                         }
-                                    )
-                                }
-                            }
-                        } else {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = "No associated defects",
-                                fontSize = 13.sp,
-                                color = Color(0xFF90A4AE)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            if (isSaving) return@Button
-                            isSaving = true
-                            scope.launch {
-                                // Enhanced sync to cloud with auto-save and polling
-                                val uid = eventId
-                                if (uid.isBlank()) {
-                                    Toast.makeText(context, "Please generate event UID first (save locally then retry)", Toast.LENGTH_SHORT).show()
-                                    isSaving = false
-                                    return@launch
-                                }
-                                
-                                // 使用增强的同步上传功能
-                                val (ok, msg) = viewModel.uploadEventWithSync(
-                                    eventUid = uid,
-                                    projectName = projectName,
-                                    location = location,
-                                    description = description,
-                                    riskResult = riskResult,
-                                    photoFiles = photoFiles,
-                                    audioFiles = audioFiles,
-                                    selectedDefects = selectedDefects,
-                                    digitalAssetFileIds = currentSelectedStorageFileIds,
-                                    structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
+                                    }
                                 )
-                                
-                                isSaving = false
-                                if (ok) {
-                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                    onBack()
-                                } else {
-                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                                }
                             }
-                        },
-                        enabled = !isSaving
-                    ) { Text(if (isSaving) "Uploading..." else "Sync to Cloud") }
-
-                    // 只有在编辑现有事件时才显示删除按�?
-                    if (eventId.isNotBlank() && eventId != "0") {
-                        OutlinedButton(
-                            onClick = { showDeleteDialog = true },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            ),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error)
-                        ) { 
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "Delete Event",
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Delete") 
                         }
+                    } else {
+                        Text(text = "No associated defects", fontSize = 13.sp, color = Color(0xFF90A4AE))
                     }
                 }
+
+                // 为固定底栏留出空间，避免滚动内容与底部遮挡
+                Spacer(modifier = Modifier.height(80.dp))
             }
         }
     }
@@ -1378,6 +1951,8 @@ import com.google.gson.Gson
             loader = projectUid?.let { viewModel.createRiskMatrixLoader(it) } 
                 ?: viewModel.createRiskMatrixLoaderByName(projectName),
             initialAnswers = riskResult?.answers,
+            // 传入对象格式以支持新缓存回显
+            initialAssessmentData = riskResult?.assessmentData,
             projectUid = projectUid,
             projectDigitalAssetDao = viewModel.projectDigitalAssetDao
         )
@@ -1439,10 +2014,35 @@ import com.google.gson.Gson
                 
                 // 立即触发自动保存，确保defect关联变化被保存并更新event_count
                 scope.launch {
+                    if (isAutoSaving) {
+                        Log.d("EventFormScreen", "Skip auto-save after defect selection: save in progress")
+                        return@launch
+                    }
                     try {
-                        val isEditMode = eventId.isNotBlank()
-                        val currentEventId = if (isEditMode) eventId.toLongOrNull() else eventRoomId
-                        
+                        isAutoSaving = true
+                        // 修复关键逻辑：优先通过事件UID解析已存在的Room ID，确保更新而非插入
+                        val idFromUid = when {
+                            eventId.isNotBlank() -> viewModel.getEventRoomIdByUid(eventId)
+                            !loadedEventUid.isNullOrBlank() -> viewModel.getEventRoomIdByUid(loadedEventUid!!)
+                            else -> null
+                        }
+                        val existingEventId = idFromUid ?: eventRoomId
+                        val isEditMode = existingEventId != null && existingEventId > 0
+                        val currentEventId = existingEventId
+
+                        // 计算有效的数字资产 fileIds：优先 current fileIds，其次 nodeIds→fileIds 映射，最后回退 lastNonEmpty
+                        val effectiveAssetFileIds: List<String> = when {
+                            currentSelectedStorageFileIds.isNotEmpty() -> currentSelectedStorageFileIds
+                            currentSelectedStorageNodeIds.isNotEmpty() -> try {
+                                viewModel.getFileIdsByNodeIds(currentSelectedStorageNodeIds)
+                            } catch (_: Exception) { lastNonEmptySelectedStorageFileIds }
+                            lastNonEmptySelectedStorageFileIds.isNotEmpty() -> lastNonEmptySelectedStorageFileIds
+                            lastNonEmptySelectedStorageNodeIds.isNotEmpty() -> try {
+                                viewModel.getFileIdsByNodeIds(lastNonEmptySelectedStorageNodeIds)
+                            } catch (_: Exception) { emptyList() }
+                            else -> emptyList()
+                        }
+
                         val result = viewModel.saveEventToRoom(
                             projectName = projectName,
                             location = location,
@@ -1453,17 +2053,38 @@ import com.google.gson.Gson
                             photoFiles = photoFiles,
                             audioFiles = audioFiles,
                             selectedDefects = selectedDefects.toList(),
-                            digitalAssetFileIds = currentSelectedStorageFileIds,
+                            // 修复：数字资产参数采用有效 fileIds（nodeIds→fileIds 映射兜底）
+                            digitalAssetFileIds = effectiveAssetFileIds,
                             structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) }
                         )
                         
-                        result.onSuccess { savedEventId ->
+                        val savedEventId = result.getOrNull()
+                        if (savedEventId != null) {
                             Log.d("EventFormScreen", "Auto-saved event after defect selection change: projectName=$projectName, isEditMode=$isEditMode, savedEventId=$savedEventId, defectCount=${selectedDefects.size}")
-                        }.onFailure { e ->
-                            Log.e("EventFormScreen", "Failed to auto-save event after defect selection change: ${e.message}", e)
+                            if (!isEditMode && eventRoomId == null) {
+                                eventRoomId = savedEventId
+                            }
+                            // 同步持久化事件UID
+                            if (loadedEventUid.isNullOrBlank()) {
+                                try {
+                                    val savedUid = viewModel.getEventUidById(savedEventId)
+                                    if (!savedUid.isNullOrBlank()) {
+                                        loadedEventUid = savedUid
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w("EventFormScreen", "Failed to resolve UID after defect change for eventId=$savedEventId: ${e.message}")
+                                }
+                            }
+                        } else {
+                            val e = result.exceptionOrNull()
+                            if (e != null) {
+                                Log.e("EventFormScreen", "Failed to auto-save event after defect selection change: ${e.message}", e)
+                            }
                         }
                     } catch (e: Exception) {
                         Log.e("EventFormScreen", "Exception during auto-save after defect selection change: ${e.message}", e)
+                    } finally {
+                        isAutoSaving = false
                     }
                 }
             }
@@ -1493,6 +2114,70 @@ import com.google.gson.Gson
             }
         )
     }
+    // 项目选择底部弹窗：用于在同步前选择目标项目
+    if (showProjectPicker) {
+        ProjectPickerBottomSheet(
+            projects = notFinishedProjects,
+            defaultProjectUid = projectUid,
+            onConfirm = { targetProject ->
+                showProjectPicker = false
+                scope.launch {
+                    val finalUid: String = run {
+                        if (eventId.isNotBlank()) {
+                            val asLong = eventId.toLongOrNull()
+                            if (asLong != null) {
+                                viewModel.getEventUidById(asLong) ?: (loadedEventUid ?: "")
+                            } else {
+                                eventId
+                            }
+                        } else {
+                            loadedEventUid ?: ""
+                        }
+                    }
+                    if (finalUid.isBlank()) {
+                        Toast.makeText(context, "Please generate event UID first (save locally then retry)", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    isSaving = true
+                    // 计算上传时的有效数字资产 fileIds：优先 current，其次 nodeIds→fileIds，最后回退 lastNonEmpty
+                    val uploadEffectiveFileIds: List<String> = when {
+                        currentSelectedStorageFileIds.isNotEmpty() -> currentSelectedStorageFileIds
+                        currentSelectedStorageNodeIds.isNotEmpty() -> try {
+                            viewModel.getFileIdsByNodeIds(currentSelectedStorageNodeIds)
+                        } catch (_: Exception) { lastNonEmptySelectedStorageFileIds }
+                        lastNonEmptySelectedStorageFileIds.isNotEmpty() -> lastNonEmptySelectedStorageFileIds
+                        lastNonEmptySelectedStorageNodeIds.isNotEmpty() -> try {
+                            viewModel.getFileIdsByNodeIds(lastNonEmptySelectedStorageNodeIds)
+                        } catch (_: Exception) { emptyList() }
+                        else -> emptyList()
+                    }
+                    val (ok, msg) = viewModel.uploadEventWithSyncRetry(
+                        eventUid = finalUid,
+                        projectName = projectName,
+                        location = location,
+                        description = description,
+                        riskResult = riskResult,
+                        photoFiles = photoFiles,
+                        audioFiles = audioFiles,
+                        selectedDefects = selectedDefects,
+                        digitalAssetFileIds = uploadEffectiveFileIds,
+                        structuralDefectDetails = structuralDefectJsonRaw ?: structuralDefectResult?.let { Gson().toJson(it) },
+                        overrideTargetProjectUid = targetProject.projectUid,
+                        maxRetries = 5,
+                        delayMs = 3000
+                    )
+                    isSaving = false
+                    if (ok) {
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        onBack()
+                    } else {
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
+            onDismiss = { showProjectPicker = false }
+        )
+    }
 }
 
 /**
@@ -1507,22 +2192,17 @@ private fun ExitConfirmationDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = "No Associated Defects",
-                fontWeight = FontWeight.Bold
-            )
-        },
         text = {
             Text(
-                text = "This event has no associated defects. Are you sure you want to leave this page?",
-                fontSize = 14.sp
+                text = "This event has no historical defect linked.",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
             )
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(
-                    text = "Yes, Leave",
+                    text = "Sure",
                     color = MaterialTheme.colorScheme.error
                 )
             }
@@ -1548,7 +2228,11 @@ private fun ExitConfirmationDialog(
 private fun DefectInfoCard(
     defect: DefectEntity,
     onDefectClick: (DefectEntity) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** 是否显示图片缩略图（默认显示） */
+    showImages: Boolean = true,
+    /** 右侧删除按钮点击回调（为空则不显示删除按钮） */
+    onDeleteClick: (() -> Unit)? = null
 ) {
     // State: 当前被预览的大图路径
     var largePhotoPath by remember { mutableStateOf<String?>(null) }
@@ -1598,7 +2282,9 @@ private fun DefectInfoCard(
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF222222),
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier.weight(1f, fill = false),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     
                     // 风险等级标签
@@ -1606,10 +2292,29 @@ private fun DefectInfoCard(
                         Spacer(modifier = Modifier.width(8.dp))
                         RiskLevelTag(riskLevel = defect.riskRating)
                     }
+
+                    // 删除按钮（如果提供删除回调）
+                    if (onDeleteClick != null) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(Color(0xFFE0E0E0), CircleShape)
+                                .clickable { onDeleteClick() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "Remove defect",
+                                tint = Color(0xFF757575),
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
                 }
                 
-                // 图片缩略图展示区�?
-                if (defectImages.isNotEmpty()) {
+                // 图片缩略图展示区域（可切换显示/隐藏）
+                if (showImages && defectImages.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     DefectThumbnailRow(
                         images = defectImages,
@@ -1619,6 +2324,8 @@ private fun DefectInfoCard(
             }
         }
     }
+
+    // （已移至 EventFormScreen 顶层）
     
     // 全屏图片预览对话�?
     if (largePhotoPath != null) {
@@ -2425,6 +3132,99 @@ private fun VoiceRecordingOverlay(level: Float, modifier: Modifier = Modifier) {
                         cornerRadius = androidx.compose.ui.geometry.CornerRadius(2f, 2f)
                     )
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AudioRecordBottomSheet(
+    isRecording: Boolean,
+    level: Float,
+    onStart: () -> Unit,
+    onStopAndDismiss: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    /**
+     * 函数级注释：AudioRecordBottomSheet
+     * 用途：显示底部弹窗提供“按住录音，松开结束”的交互；在录音过程中展示波形动画。
+     * 参数：
+     * - isRecording: 当前录音状态（用于处理外部关闭时的安全停止）
+     * - level: 录音音量归一化值（0..1），驱动波形幅度
+     * - onStart: 开始录音回调（按下触发）
+     * - onStopAndDismiss: 结束录音并关闭弹窗的回调（松开触发或外部关闭触发）
+     * - onDismiss: 关闭弹窗回调（未录音时直接关闭）
+     * 返回：无
+     * 逻辑：
+     * - 采用 Material3 ModalBottomSheet 实现底部弹窗；
+     * - 大圆形按钮使用 detectTapGestures(onPress) 捕获按下与释放；
+     * - 录音过程通过 VoiceRecordingOverlay 展示动态波形效果。
+     */
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = {
+            if (isRecording) onStopAndDismiss() else onDismiss()
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Press and hold to record",
+                fontSize = 14.sp,
+                color = Color(0xFF546E7A)
+            )
+            // 录音波浪效果移至麦克风按钮上方
+            if (isRecording) {
+                VoiceRecordingOverlay(
+                    level = level,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF1565C0))
+                    .pointerInput(Unit) {
+                        // 优化：兼容较低版本 Compose，移除 awaitFirstDown，改为按压检测循环
+                        awaitPointerEventScope {
+                            // 等待任意触点进入按压状态即开始录音
+                            var started = false
+                            while (!started) {
+                                val event = awaitPointerEvent()
+                                val anyPressed = event.changes.any { it.pressed }
+                                if (anyPressed) {
+                                    runCatching { onStart() }
+                                    event.changes.forEach { it.consume() }
+                                    started = true
+                                }
+                            }
+                            // 等待所有触点抬起或取消后结束录音并关闭弹窗
+                            var released = false
+                            while (!released) {
+                                val event = awaitPointerEvent()
+                                event.changes.forEach { it.consume() }
+                                val anyPressed = event.changes.any { it.pressed }
+                                if (!anyPressed) {
+                                    released = true
+                                }
+                            }
+                            runCatching { onStopAndDismiss() }
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = "Record",
+                    tint = Color.White,
+                    modifier = Modifier.size(40.dp)
+                )
             }
         }
     }

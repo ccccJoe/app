@@ -110,6 +110,16 @@ interface ProjectDigitalAssetDao {
     @Query("UPDATE project_digital_asset SET download_url = :downloadUrl, updated_at = :updatedAt WHERE file_id = :fileId")
     suspend fun updateDownloadUrlByFileId(fileId: String, downloadUrl: String, updatedAt: Long)
 
+    /**
+     * 更新指定节点的 project_uids JSON 数组。
+     * 用途：在同步后移除不再关联的项目UID，或追加新的UID。
+     * @param nodeId 节点ID（唯一）
+     * @param projectUids 更新后的JSON数组字符串
+     * @param updatedAt 更新时间戳
+     */
+    @Query("UPDATE project_digital_asset SET project_uids = :projectUids, updated_at = :updatedAt WHERE node_id = :nodeId")
+    suspend fun updateProjectUids(nodeId: String, projectUids: String, updatedAt: Long)
+
     /** Update type field for digital asset. */
     @Query("UPDATE project_digital_asset SET type = :type, updated_at = :updatedAt WHERE node_id = :nodeId")
     suspend fun updateType(nodeId: String, type: String, updatedAt: Long)

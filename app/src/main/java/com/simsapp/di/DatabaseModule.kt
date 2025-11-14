@@ -16,6 +16,7 @@ import com.simsapp.data.local.dao.EventDao
 import com.simsapp.data.local.dao.ProjectDao
 import com.simsapp.data.local.dao.ProjectDetailDao
 import com.simsapp.data.local.dao.ProjectDigitalAssetDao
+import com.simsapp.data.local.dao.DefectDataAssetDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -377,6 +378,154 @@ object DatabaseModule {
         }
     }
 
+    /** Migration: v19 -> v20, add sort_order column to defect for persistent ordering. */
+    private val MIGRATION_19_20 = object : Migration(19, 20) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 新增排序列，默认为0；在应用层根据拖拽结果写入顺序
+            database.execSQL("ALTER TABLE defect ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    /** Migration: v20 -> v21, create defect_data_asset table for historical defects' assets. */
+    private val MIGRATION_20_21 = object : Migration(20, 21) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 创建用于缓存历史缺陷数字资产的表
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS defect_data_asset (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    project_uid TEXT NOT NULL,
+                    defect_uid TEXT NOT NULL,
+                    file_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    file_name TEXT,
+                    download_url TEXT,
+                    local_path TEXT,
+                    download_status TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_defect_data_asset_defect_uid ON defect_data_asset(defect_uid)")
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_defect_data_asset_project_uid ON defect_data_asset(project_uid)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_defect_data_asset_file_id ON defect_data_asset(file_id)")
+        }
+    }
+
+    /** Migration: v21 -> v22, add file_name column to defect_data_asset table (idempotent). */
+    private val MIGRATION_21_22 = object : Migration(21, 22) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // Add column only if it does not already exist to avoid duplicate column error
+            val cursor = database.query("PRAGMA table_info(defect_data_asset)")
+            var hasFileName = false
+            try {
+                val nameIndex = cursor.getColumnIndex("name")
+                while (cursor.moveToNext()) {
+                    val col = if (nameIndex != -1) cursor.getString(nameIndex) else null
+                    if (col == "file_name") {
+                        hasFileName = true
+                        break
+                    }
+                }
+            } finally {
+                cursor.close()
+            }
+            if (!hasFileName) {
+                database.execSQL("ALTER TABLE defect_data_asset ADD COLUMN file_name TEXT")
+            }
+        }
+    }
+
+    /**
+     * Migration: v22 -> v23
+     * 目的：修复历史数据库中 project.project_uid 可能为 NULL 导致 Kotlin 非空映射崩溃的问题。
+     * 方法：重建 project 表，确保以下字段的非空与默认值：
+     * - name TEXT NOT NULL
+     * - project_uid TEXT NOT NULL DEFAULT ''
+     * - project_hash TEXT NOT NULL DEFAULT ''
+     * - status TEXT NOT NULL DEFAULT 'ACTIVE'
+     * - defect_count INTEGER NOT NULL DEFAULT 0
+     * - event_count INTEGER NOT NULL DEFAULT 0
+     * - is_deleted INTEGER NOT NULL DEFAULT 0
+     * 并通过 COALESCE 将旧表中的空值安全回填为默认值。
+     */
+    private val MIGRATION_22_23 = object : Migration(22, 23) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 1. 创建新表，约束非空与默认值
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS project_new (
+                    project_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    name TEXT NOT NULL,
+                    project_uid TEXT NOT NULL DEFAULT '',
+                    project_hash TEXT NOT NULL DEFAULT '',
+                    end_date INTEGER,
+                    status TEXT NOT NULL DEFAULT 'ACTIVE',
+                    defect_count INTEGER NOT NULL DEFAULT 0,
+                    event_count INTEGER NOT NULL DEFAULT 0,
+                    is_deleted INTEGER NOT NULL DEFAULT 0
+                )
+                """.trimIndent()
+            )
+
+            // 2. 拷贝旧数据，使用 COALESCE 将 NULL 转换为安全默认值
+            database.execSQL(
+                """
+                INSERT INTO project_new (
+                    project_id, name, project_uid, project_hash, end_date, status, defect_count, event_count, is_deleted
+                )
+                SELECT 
+                    project_id,
+                    COALESCE(name, ''),
+                    COALESCE(project_uid, ''),
+                    COALESCE(project_hash, ''),
+                    end_date,
+                    COALESCE(status, 'ACTIVE'),
+                    COALESCE(defect_count, 0),
+                    COALESCE(event_count, 0),
+                    COALESCE(is_deleted, 0)
+                FROM project
+                """.trimIndent()
+            )
+
+            // 3. 替换旧表
+            database.execSQL("DROP TABLE project")
+            database.execSQL("ALTER TABLE project_new RENAME TO project")
+
+            // 4. 重建索引
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_project_name ON project (name)")
+            database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_project_project_uid ON project (project_uid)")
+        }
+    }
+
+    /**
+     * Migration: v23 -> v24
+     * 目的：为 event 表新增同步标记字段 is_synced，便于区分未同步与已同步事件。
+     * 逻辑：
+     * - 添加新列 is_synced，类型为 INTEGER，非空，默认值为 0（未同步）。
+     * - 创建复合索引 (project_uid, is_synced)，优化按项目筛选未同步事件的查询。
+     */
+    private val MIGRATION_23_24 = object : Migration(23, 24) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            // 为 event 表添加 is_synced 列，默认 0 表示未同步
+            database.execSQL("ALTER TABLE event ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0")
+            // 创建复合索引以优化查询
+            database.execSQL("CREATE INDEX IF NOT EXISTS index_event_project_uid_is_synced ON event (project_uid, is_synced)")
+        }
+    }
+
+    /**
+     * Migration: v24 -> v25
+     * 目的：为 project 表新增缓存字段 ralation_time（INTEGER，可空），用于首页 project_list 接口的关系时间缓存。
+     * 逻辑：添加列，不设置 NOT NULL，以兼容历史数据为空。
+     */
+    private val MIGRATION_24_25 = object : Migration(24, 25) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("ALTER TABLE project ADD COLUMN ralation_time INTEGER")
+        }
+    }
+
     /**
      * Provide the Room database instance.
      *
@@ -387,9 +536,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "sims.db")
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19)
-            // 临时启用破坏性迁移来解决KSP编译问题
-            .fallbackToDestructiveMigration()
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23, MIGRATION_23_24, MIGRATION_24_25)
             .build()
 
     /** Provide ProjectDao. */
@@ -415,4 +562,8 @@ object DatabaseModule {
     /** Provide ProjectDigitalAssetDao. */
     @Provides
     fun provideProjectDigitalAssetDao(db: AppDatabase): ProjectDigitalAssetDao = db.projectDigitalAssetDao()
+
+    /** Provide DefectDataAssetDao. */
+    @Provides
+    fun provideDefectDataAssetDao(db: AppDatabase): DefectDataAssetDao = db.defectDataAssetDao()
 }

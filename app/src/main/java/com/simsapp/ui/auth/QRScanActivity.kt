@@ -250,25 +250,14 @@ fun QRScanScreen(
             modifier = Modifier.fillMaxSize()
         )
         
-        // 顶部工具栏
-        TopAppBar(
-            title = {
-                Text(
-                    text = "Scan QR Code",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White
-                    )
-                }
-            },
+        // 顶部工具栏（居中标题 + 标准返回图标）
+        com.simsapp.ui.common.AppTopBar(
+            title = "Scan QR Code",
+            onBack = onBack,
+            containerColor = Color.Transparent,
+            titleColor = Color.White,
+            navigationIconColor = Color.White,
+            modifier = Modifier.statusBarsPadding(),
             actions = {
                 // 闪光灯切换按钮
                 IconButton(
@@ -283,11 +272,7 @@ fun QRScanScreen(
                         tint = Color.White
                     )
                 }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = Color.Transparent
-            ),
-            modifier = Modifier.statusBarsPadding()
+            }
         )
         
         // 扫描框

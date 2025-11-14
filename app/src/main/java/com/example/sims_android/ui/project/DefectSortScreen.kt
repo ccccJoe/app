@@ -71,22 +71,11 @@ fun DefectSortScreen(
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        text = "Defect Sorting",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Medium
-                    ) 
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                },
+            com.simsapp.ui.common.AppTopBar(
+                title = "Defect Sorting",
+                onBack = onBack,
+                containerColor = MaterialTheme.colorScheme.surface,
+                titleColor = MaterialTheme.colorScheme.onSurface,
                 actions = {
                     TextButton(
                         onClick = { onConfirm(sortableDefects) }
@@ -103,10 +92,7 @@ fun DefectSortScreen(
                             fontWeight = FontWeight.Medium
                         )
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
+                }
             )
         }
     ) { paddingValues ->

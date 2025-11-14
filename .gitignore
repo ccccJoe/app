@@ -16,6 +16,7 @@ local.properties
 
 # Log files
 *.log
+*.hprof
 window_dump*.xml
 hs_err_pid*.log
 replay_pid*.log

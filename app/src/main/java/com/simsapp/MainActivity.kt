@@ -124,14 +124,23 @@ class MainActivity : ComponentActivity() {
                 return if (qs.isBlank()) "projectInfo" else "projectInfo?$qs"
             }
         }
-        /** Defect detail page with required argument: defectNo */
-        data object DefectDetail : AppDestination("defect?no={no}&projectUid={projectUid}") {
+        /** Defect detail page with required argument: defectNo; optional: projectUid, projectName */
+        data object DefectDetail : AppDestination("defect?no={no}&projectUid={projectUid}&projectName={projectName}") {
             const val ARG_NO = "no"
             const val ARG_PROJECT_UID = "projectUid"
-            fun route(no: String, projectUid: String?): String {
+            const val ARG_PROJECT_NAME = "projectName"
+            /**
+             * Build route for defect detail.
+             * Params:
+             * - no: defect number (required)
+             * - projectUid: project uid (optional)
+             * - projectName: project name (optional)
+             */
+            fun route(no: String, projectUid: String?, projectName: String?): String {
                 val encodedNo = Uri.encode(no)
                 val uid = Uri.encode(projectUid ?: "")
-                return "defect?no=$encodedNo&projectUid=$uid"
+                val name = Uri.encode(projectName ?: "")
+                return "defect?no=$encodedNo&projectUid=$uid&projectName=$name"
             }
         }
         
@@ -196,7 +205,8 @@ class MainActivity : ComponentActivity() {
                     val startRoute = remember {
                         val no = intent?.getStringExtra(AppDestination.DefectDetail.ARG_NO)
                         val uid = intent?.getStringExtra(AppDestination.DefectDetail.ARG_PROJECT_UID)
-                        if (!no.isNullOrBlank()) AppDestination.DefectDetail.route(no, uid) else AppDestination.Dashboard.route
+                        val name = intent?.getStringExtra(AppDestination.DefectDetail.ARG_PROJECT_NAME)
+                        if (!no.isNullOrBlank()) AppDestination.DefectDetail.route(no, uid, name) else AppDestination.Dashboard.route
                     }
                     // 仅在首次组合后触发导航，避免重复导航导致 BackStack 异常
                     androidx.compose.runtime.LaunchedEffect(startRoute) {
@@ -277,7 +287,7 @@ class MainActivity : ComponentActivity() {
                                 navController.navigate(AppDestination.ProjectInfo.route(projectName, projectUid))
                             },
                             onOpenDefect = { no ->
-                                navController.navigate(AppDestination.DefectDetail.route(no, projectUid))
+                                navController.navigate(AppDestination.DefectDetail.route(no, projectUid, projectName))
                             },
                             onOpenDefectSort = { defects ->
                                 // 安全地将缺陷列表保存到当前导航条目的savedStateHandle中
@@ -320,12 +330,14 @@ class MainActivity : ComponentActivity() {
                         // 缓存从文件选择器返回的选项
                         var selectedStorage by remember { mutableStateOf(listOf<String>()) }
                         var selectedStorageFileIds by remember { mutableStateOf(listOf<String>()) }
+                        var selectedStorageNodeIds by remember { mutableStateOf(listOf<String>()) }
                         // 观察从 StoragePicker 返回的结果
                         val currentBackStackEntry = navController.currentBackStackEntry
                         DisposableEffect(currentBackStackEntry) {
                             val handle = currentBackStackEntry?.savedStateHandle
                             val liveData = handle?.getLiveData<List<String>>("selectedStorage")
                             val fileIdsLiveData = handle?.getLiveData<List<String>>("selectedStorageFileIds")
+                            val nodeIdsLiveData = handle?.getLiveData<List<String>>("selectedStorageNodeIds")
                             val observer = Observer<List<String>> { names ->
                                 if (names != null) {
                                     selectedStorage = names
@@ -338,11 +350,19 @@ class MainActivity : ComponentActivity() {
                                     handle?.remove<List<String>>("selectedStorageFileIds")
                                 }
                             }
+                            val nodeIdsObserver = Observer<List<String>> { nodeIds ->
+                                if (nodeIds != null) {
+                                    selectedStorageNodeIds = nodeIds
+                                    handle?.remove<List<String>>("selectedStorageNodeIds")
+                                }
+                            }
                             liveData?.observeForever(observer)
                             fileIdsLiveData?.observeForever(fileIdsObserver)
+                            nodeIdsLiveData?.observeForever(nodeIdsObserver)
                             onDispose { 
                                 liveData?.removeObserver(observer)
                                 fileIdsLiveData?.removeObserver(fileIdsObserver)
+                                nodeIdsLiveData?.removeObserver(nodeIdsObserver)
                             }
                         }
                         EventFormScreen(
@@ -350,20 +370,21 @@ class MainActivity : ComponentActivity() {
                             eventId = eventId,
                             defectId = defectId,
                             onBack = { navController.popBackStack() },
-                            onOpenStorage = { projectUid, selectedAssetFileIds ->
-                                android.util.Log.d("MainActivity", "接收到数字资产选择请求，projectUid: $projectUid, fileIds: ${selectedAssetFileIds.joinToString()}")
-                                // 保存当前选中的资产fileId到savedStateHandle，用于回显
-                                navController.currentBackStackEntry?.savedStateHandle?.set("selectedStorageFileIds", selectedAssetFileIds)
+                            onOpenStorage = { projectUid, selectedNodeIds, selectedFileIds ->
+                                android.util.Log.d("MainActivity", "接收到数字资产选择请求，projectUid: $projectUid, nodeIds: ${selectedNodeIds.joinToString()}, fileIds: ${selectedFileIds.joinToString()}")
+                                // 保存当前选中的资产nodeId与fileId到savedStateHandle，用于回显
+                                navController.currentBackStackEntry?.savedStateHandle?.set("selectedStorageNodeIds", selectedNodeIds)
+                                navController.currentBackStackEntry?.savedStateHandle?.set("selectedStorageFileIds", selectedFileIds)
                                 // 直接使用传递的projectUid导航到StoragePicker
                                 navController.navigate(AppDestination.StoragePicker.route(null, projectUid))
                             },
-                            selectedStorage = selectedStorage,
-                            selectedStorageFileIds = selectedStorageFileIds, // 新增：传递数字资产file_id列表
+                            selectedStorageFileIds = selectedStorageFileIds, // 传递数字资产file_id列表（兼容旧回显）
+                            selectedStorageNodeIds = selectedStorageNodeIds, // 传递数字资产节点ID列表（精准回显）
                             onOpenDefect = { defect ->
                                 // 从defect对象中获取projectUid和defectNo来导航到详情页面
                                 val projectUid = defect.projectUid
                                 val defectNo = defect.defectNo
-                                navController.navigate(AppDestination.DefectDetail.route(defectNo, projectUid))
+                                navController.navigate(AppDestination.DefectDetail.route(defectNo, projectUid, projectName))
                             }
                         )
                     }
@@ -390,13 +411,15 @@ class MainActivity : ComponentActivity() {
                         // 获取之前选中的资产名称列表（用于回显）
                         val previousSelectedStorage = navController.previousBackStackEntry?.savedStateHandle?.get<List<String>>("selectedStorage") ?: emptyList()
                         val previousSelectedStorageFileIds = navController.previousBackStackEntry?.savedStateHandle?.get<List<String>>("selectedStorageFileIds") ?: emptyList()
+                        val previousSelectedStorageNodeIds = navController.previousBackStackEntry?.savedStateHandle?.get<List<String>>("selectedStorageNodeIds") ?: emptyList()
                         
                         android.util.Log.d("MainActivity", "StoragePicker - 获取到的回显数据: fileIds=${previousSelectedStorageFileIds.joinToString()}")
                         android.util.Log.d("MainActivity", "StoragePicker - 获取到的回显数据: names=${previousSelectedStorage.joinToString()}")
                         
                         StoragePickerScreen(
                             projectUid = projectUid,
-                            selectedAssetFileIds = previousSelectedStorageFileIds, // 传递当前选中的资产fileId列表用于回显
+                            selectedAssetFileIds = previousSelectedStorageFileIds, // 回显（兼容）：fileId列表
+                            selectedAssetNodeIds = previousSelectedStorageNodeIds, // 回显（优先）：nodeId列表
                             onBackClick = { navController.popBackStack() },
                             onItemSelected = { node ->
                                 // 处理单选的数字资产项目（保持向后兼容）
@@ -407,8 +430,10 @@ class MainActivity : ComponentActivity() {
                                 // 处理多选的数字资产项目列表
                                 val selectedNames = selectedItems.map { it.name }
                                 val selectedFileIds = selectedItems.mapNotNull { it.fileId } // 提取fileId列表
+                                val selectedNodeIds = selectedItems.map { it.id } // 提取节点ID列表
                                 navController.previousBackStackEntry?.savedStateHandle?.set("selectedStorage", selectedNames)
                                 navController.previousBackStackEntry?.savedStateHandle?.set("selectedStorageFileIds", selectedFileIds) // 新增：保存fileId列表
+                                navController.previousBackStackEntry?.savedStateHandle?.set("selectedStorageNodeIds", selectedNodeIds) // 新增：保存nodeId列表
                                 navController.popBackStack()
                             }
                         )
@@ -449,6 +474,10 @@ class MainActivity : ComponentActivity() {
                             navArgument(AppDestination.DefectDetail.ARG_PROJECT_UID) {
                                 type = NavType.StringType
                                 defaultValue = ""
+                            },
+                            navArgument(AppDestination.DefectDetail.ARG_PROJECT_NAME) {
+                                type = NavType.StringType
+                                defaultValue = ""
                             }
                         )
                     ) { backStackEntry ->
@@ -456,9 +485,15 @@ class MainActivity : ComponentActivity() {
                         val defectNo = Uri.decode(noEncoded)
                         val uidEncoded = backStackEntry.arguments?.getString(AppDestination.DefectDetail.ARG_PROJECT_UID).orEmpty()
                         val projectUidArg = Uri.decode(uidEncoded)
+                        val nameEncoded = backStackEntry.arguments?.getString(AppDestination.DefectDetail.ARG_PROJECT_NAME).orEmpty()
+                        val projectNameArg = Uri.decode(nameEncoded)
                         DefectDetailScreen(
                             defectNo = defectNo,
                             projectUid = projectUidArg.ifBlank { null },
+                            projectName = projectNameArg.ifBlank { null },
+                            onCreateEventForDefect = { no ->
+                                navController.navigate(AppDestination.Event.route(projectNameArg, defectId = no))
+                            },
                             onBack = { navController.popBackStack() }
                         )
                     }

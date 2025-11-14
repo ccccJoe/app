@@ -52,7 +52,8 @@ class ProjectRepository @Inject constructor(
     private val projectDetailDao: com.simsapp.data.local.dao.ProjectDetailDao,
     private val defectRepository: DefectRepository,
     private val eventRepository: EventRepository,
-    private val projectDigitalAssetRepository: ProjectDigitalAssetRepository
+    private val projectDigitalAssetRepository: ProjectDigitalAssetRepository,
+    private val defectDataAssetRepository: DefectDataAssetRepository
 ) {
     /** 全局同步状态：用于跨页面/前后台保持“同步中”标识 */
     private val _isSyncing = MutableStateFlow(false)
@@ -197,10 +198,21 @@ class ProjectRepository @Inject constructor(
      * - 新增：基于 project_hash 的增量同步优化，避免重复获取详情
      * - 仅对 hash 值不同或本地不存在的项目进行详情拉取和缓存
      */
+    /**
+     * Function: syncProjectsFromEndpoint
+     * Description: Pull project list, perform incremental updates and cache details.
+     * Parameters:
+     * - endpoint: remote URL path
+     * - username: optional header override
+     * - authorization: optional header override
+     * - onProjectProgress: optional callback reporting (completed, total) project progress
+     * Return: Result<Int> indicating projectsToUpdate.size (number of projects that need update)
+     */
     suspend fun syncProjectsFromEndpoint(
         endpoint: String,
         username: String? = null,
-        authorization: String? = null
+        authorization: String? = null,
+        onProjectProgress: ((completed: Int, total: Int) -> Unit)? = null
     ): Result<Int> {
         _isSyncing.value = true
         return try {
@@ -247,6 +259,8 @@ class ProjectRepository @Inject constructor(
             }
 
             Log.i("SIMS-SYNC", "Projects analysis: total=${remoteEntities.size}, toUpdate=${projectsToUpdate.size}, toSkip=${projectsToSkip.size}")
+            // 初始进度回调（0 / total）
+            onProjectProgress?.invoke(0, projectsToUpdate.size)
 
             // 仅更新需要更新的项目的基本信息，保留hash值一致项目的本地缓存数据
             if (projectsToUpdate.isNotEmpty()) {
@@ -272,12 +286,29 @@ class ProjectRepository @Inject constructor(
                 if (localProject != null) {
                     // 仅更新可能变化的计数器字段，保留其他本地数据
                     projectDao.updateCounters(localProject.projectId, entity.defectCount, entity.eventCount)
+
+                    // 新增逻辑：hash 未变化但远端 project_status 发生变更时，更新本地项目状态
+                    // 说明：比较时忽略大小写，兼容服务端返回大小写差异；不修改其他字段以避免影响本地缓存
+                    val remoteStatus = entity.status
+                    val localStatus = localProject.status
+                    if (!remoteStatus.equals(localStatus, ignoreCase = true)) {
+                        projectDao.updateStatusByUid(entity.projectUid, remoteStatus)
+                        Log.i("SIMS-SYNC", "Updated status for uid=${entity.projectUid}: '$localStatus' -> '$remoteStatus'")
+                    }
+
+                    // 新增逻辑：缓存 ralation_time（来自 project_list），即使 hash 未变化也写入最新值
+                    try {
+                        projectDao.updateRalationTimeByUid(entity.projectUid, entity.ralationTime)
+                    } catch (e: Exception) {
+                        Log.w("SIMS-SYNC", "Update ralation_time failed for uid=${entity.projectUid}: ${e.message}")
+                    }
                 }
             }
             Log.i("SIMS-SYNC", "Updated counters for ${projectsToSkip.size} unchanged projects")
 
             // 仅对需要更新的项目拉取详情
             var detailUpdateCount = 0
+            var completed = 0
             try {
                 for (entity in projectsToUpdate) {
                     val uid = entity.projectUid
@@ -322,7 +353,7 @@ class ProjectRepository @Inject constructor(
                         // 缓存历史缺陷数据到defect表
                         cacheHistoryDefectsToDatabase(projectId = localProject.projectId, projectUid = uid, detailJson = detailJson)
                         
-                        // 处理数字资产树，解析并下载所有file_id不为null的节点
+                        // 处理项目数字资产树，解析并下载所有file_id不为null的节点
                         try {
                             val (successCount, totalCount) = projectDigitalAssetRepository.processDigitalAssetTree(
                                 projectId = localProject.projectId,
@@ -333,17 +364,32 @@ class ProjectRepository @Inject constructor(
                         } catch (e: Exception) {
                             Log.e("SIMS-SYNC", "Digital asset processing error for project uid=$uid: ${e.message}", e)
                         }
+
+                        // 新增：处理历史缺陷的 defect_data_assets（按缺陷UID关联），解析并下载缓存到本地
+                        try {
+                            defectDataAssetRepository.processFromProjectDetail(
+                                projectUid = uid,
+                                detailJson = detailJson
+                            )
+                            Log.d("SIMS-SYNC", "Defect data assets processed for project uid=$uid")
+                        } catch (e: Exception) {
+                            Log.e("SIMS-SYNC", "Defect data assets processing error for project uid=$uid: ${e.message}", e)
+                        }
                     } catch (e: Exception) {
                         Log.e("SIMS-SYNC", "cache images/assets error uid=$uid, ${e.message}", e)
                     }
+                    // 单项目完成后更新进度
+                    completed += 1
+                    onProjectProgress?.invoke(completed, projectsToUpdate.size)
                 }
             } catch (e: Exception) {
                 Log.e("SIMS-SYNC", "Detail fetch error: ${e.message}", e)
             }
 
-            Log.i("SIMS-SYNC", "Incremental sync completed: ${remoteEntities.size} projects, ${detailUpdateCount} details updated")
+            Log.i("SIMS-SYNC", "Incremental sync completed: total=${remoteEntities.size}, needUpdate=${projectsToUpdate.size}, detailsUpdated=${detailUpdateCount}")
             _isSyncing.value = false
-            Result.success(remoteEntities.size)
+            // 返回需更新的项目个数，确保与 UI 进度和成功提示一致
+            Result.success(projectsToUpdate.size)
         } catch (e: Exception) {
             _isSyncing.value = false
             Result.failure(e)
@@ -432,12 +478,23 @@ class ProjectRepository @Inject constructor(
         val defectCount = (anyNum("defectCount", "defect_count")?.toInt()) ?: 0
         val eventCount = (anyNum("eventCount", "event_count")?.toInt()) ?: 0
 
+        // 新增：ralation_time 缓存字段（支持数值和字符串日期），优先使用同名键；兼容可能的拼写 relation_time
+        val ralationTimeMillis: Long? = when {
+            anyNum("ralation_time", "relation_time") != null -> anyNum("ralation_time", "relation_time")!!.toLong()
+            anyStr("ralation_time", "relation_time") != null -> {
+                val s = anyStr("ralation_time", "relation_time")!!
+                s.toLongOrNull() ?: parseDateToMillis(s)
+            }
+            else -> null
+        }
+
         return ProjectEntity(
             projectId = id,
             name = name,
             projectUid = projectUid,
             projectHash = projectHash,
             endDate = endDateMillis,
+            ralationTime = ralationTimeMillis,
             status = status,
             defectCount = defectCount,
             eventCount = eventCount
@@ -498,6 +555,12 @@ class ProjectRepository @Inject constructor(
      * @return 已完成状态的项目列表
      */
     fun getFinishedProjects(): Flow<List<ProjectEntity>> = projectDao.getFinishedProjects()
+
+    /**
+     * 获取非完成状态的项目列表 Flow。
+     * 用途：上传事件前的项目选择弹窗，展示可同步的目标项目。
+     */
+    fun getNotFinishedProjects(): Flow<List<ProjectEntity>> = projectDao.getNotFinishedProjects()
 
     /**
      * 批量删除项目及其相关数据

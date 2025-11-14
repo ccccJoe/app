@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -102,6 +104,9 @@ data class StructuralDefectField(
     val type: String, // "select" or "input"
     val placeholder: String,
     val options: List<String> = emptyList(),
+    // 新增：树形下拉（Cascader）选项
+    // 当存在非空 treeOptions 时，优先使用树形下拉；否则使用扁平 options
+    val treeOptions: List<OptionNode> = emptyList(),
     val span: Int = 12 // 布局跨度，12为半宽，24为全宽
 )
 
@@ -110,6 +115,19 @@ enum class FieldType {
     TEXT_INPUT,
     MULTILINE_TEXT
 }
+
+/**
+ * 类：OptionNode
+ * 描述：树形下拉节点数据结构，支持 label/value 与 children
+ * - label：显示给用户的文本
+ * - value：提交/存储的值（默认与 label 相同）
+ * - children：子节点列表，为空表示叶子节点
+ */
+data class OptionNode(
+    val label: String,
+    val value: String = label,
+    val children: List<OptionNode> = emptyList()
+)
 
 /**
  * 获取指定步骤的表单字段配置
@@ -123,15 +141,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "typeOfStructure",
                     label = "Type of Structure",
                     type = "select",
-                    placeholder = "Select type",
-                    options = listOf("Building", "Pipe rack", "Platform")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.typeOfStructure
                 ),
                 StructuralDefectField(
                     key = "buildingMaterial",
                     label = "Building Material",
                     type = "select",
-                    placeholder = "Select material",
-                    options = listOf("Structural steel", "Concrete")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.buildingMaterial
                 )
             ),
             // Row 2
@@ -140,15 +158,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "defectComponent",
                     label = "Defect Component",
                     type = "select",
-                    placeholder = "Select component",
-                    options = listOf("Column", "Beam", "Plate", "Bolt", "Base connection")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.defectComponent
                 ),
                 StructuralDefectField(
                     key = "defectLocation",
                     label = "Defect Location",
                     type = "select",
-                    placeholder = "Select location",
-                    options = listOf("Concrete top", "Concrete bottom", "Concrete face", "Concrete joint")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.defectLocation
                 )
             ),
             // Row 3
@@ -157,15 +175,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "defectOnComponent",
                     label = "Defect on Component",
                     type = "select",
-                    placeholder = "Select position",
-                    options = listOf("Mid-span", "Edge", "End", "Connection")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.defectOnComponent
                 ),
                 StructuralDefectField(
                     key = "positionOfDefectComponent",
                     label = "Position of Defect Component",
                     type = "select",
-                    placeholder = "Select position",
-                    options = listOf("Above ground >3m", "Above ground <3m", "Below ground")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.positionOfDefectComponent
                 )
             ),
             // Row 4
@@ -187,20 +205,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "structuralConcerns",
                     label = "Structural Concerns",
                     type = "select",
-                    placeholder = "Select concern",
-                    options = listOf(
-                        "Non-compliant design",
-                        "Inadequate section",
-                        "Concrete cracks (shrinkage)",
-                        "Steel corrosion"
-                    )
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.structuralConcerns
                 ),
                 StructuralDefectField(
                     key = "defectSeverity",
                     label = "Defect Severity",
                     type = "select",
-                    placeholder = "Select severity",
-                    options = listOf("Class 1 (Minor)", "Class 2 (Moderate)", "Class 3 (Serious)", "Class 4 (Very Serious)", "Class 5 (Critical)")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.defectSeverity
                 )
             ),
             // Row 2 - Deformation (span 12 in Vue)
@@ -209,11 +222,8 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "deformation",
                     label = "Deformation",
                     type = "select",
-                    placeholder = "Select deformation",
-                    options = listOf(
-                        "No",
-                        "Yes - Steel member deformation"
-                    ),
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.deformation,
                     span = 12
                 )
             ),
@@ -223,7 +233,7 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "defectType",
                     label = "Type",
                     type = "select",
-                    placeholder = "Select type",
+                    placeholder = "Select here",
                     options = listOf("Point", "Linear", "Area"),
                     span = 12
                 )
@@ -233,7 +243,7 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                 StructuralDefectField(
                     key = "defectQuantity",
                     label = "Quantity",
-                    type = "input",
+                    type = "number", // 限制为数字输入
                     placeholder = "0.00",
                     span = 12
                 )
@@ -247,15 +257,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "supportArrangement",
                     label = "Support Arrangement",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Simply Supported", "Fixed", "Pinned")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsConnection.supportArrangement
                 ),
                 StructuralDefectField(
                     key = "fixingNature",
                     label = "Fixing Nature",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Welded", "Bolted", "Riveted")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsConnection.fixingNature
                 )
             ),
             // Row 2
@@ -264,8 +274,8 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "defectComponentFunction",
                     label = "Defect Component Function",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Primary Load Bearing", "Secondary", "Bracing")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsConnection.defectComponentFunction
                 )
             )
         )
@@ -277,15 +287,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "structureLocation",
                     label = "Structure Location",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Enclosed environment - dry", "Enclosed environment - humid", "Open environment")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.structureLocation
                 ),
                 StructuralDefectField(
                     key = "defectComponentLoading",
                     label = "Defect Component Loading",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Dead Load", "Live Load", "Dynamic Load")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptions.defectComponentLoading
                 )
             ),
             // Row 2
@@ -294,15 +304,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "impactDamage",
                     label = "Impact Damage",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Yes", "No")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.impactDamage
                 ),
                 StructuralDefectField(
                     key = "dynamicEffect",
                     label = "Dynamic Effect",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Yes - frequent vibration/fatigue", "No")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.dynamicEffect
                 )
             ),
             // Row 3
@@ -311,15 +321,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "windEffect",
                     label = "Wind Effect",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Yes - high wind/suction effects", "No")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.windEffect
                 ),
                 StructuralDefectField(
                     key = "chemicalEffect",
                     label = "Chemical Effect",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Yes - acid/alkali/salt spray", "No")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.chemicalEffect
                 )
             )
         )
@@ -331,15 +341,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "looseObject",
                     label = "Loose Object",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Yes", "No")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.looseObject
                 ),
                 StructuralDefectField(
                     key = "dustMaterialSpill",
                     label = "Dust & Material Spill",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Yes", "No")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.dustMaterialSpill
                 )
             ),
             // Row 2
@@ -348,15 +358,15 @@ fun getFieldsForStep(step: StructuralDefectStep): List<List<StructuralDefectFiel
                     key = "accessToHazardArea",
                     label = "Access to Hazard Area",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Easily Accessible", "Restricted", "Difficult")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.accessToHazardArea
                 ),
                 StructuralDefectField(
                     key = "personnelPresenceInArea",
                     label = "Personnel Presence in Area",
                     type = "select",
-                    placeholder = "Select",
-                    options = listOf("Constant", "Intermittent", "Rare")
+                    placeholder = "Select here",
+                    treeOptions = SDDOptionsOperating.personnelPresenceInArea
                 )
             )
         )
@@ -649,7 +659,11 @@ private fun DropdownField(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    
+    // 是否为树形下拉
+    val isTree = field.treeOptions.isNotEmpty()
+    // 当前导航层级路径（用于树形下拉）
+    var path by remember { mutableStateOf(listOf<OptionNode>()) }
+
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded },
@@ -674,15 +688,52 @@ private fun DropdownField(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
-            field.options?.forEach { option ->
-                 DropdownMenuItem(
-                     text = { Text(option) },
-                     onClick = {
-                         onValueChange(option)
-                         expanded = false
-                     }
-                 )
-             }
+            if (!isTree) {
+                // 普通下拉：使用扁平 options
+                field.options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option) },
+                        onClick = {
+                            onValueChange(option)
+                            expanded = false
+                        }
+                    )
+                }
+            } else {
+                // 树形下拉：根据 path 决定当前显示的节点列表
+                val currentList = if (path.isEmpty()) field.treeOptions else path.last().children
+
+                // 当在子级时，显示“返回”头部
+                if (path.isNotEmpty()) {
+                    DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Color(0xFF546E7A)) },
+                        text = { Text(path.last().label, color = Color(0xFF1565C0)) },
+                        onClick = {
+                            path = path.dropLast(1)
+                        }
+                    )
+                }
+
+                // 列表项：有 children 的显示右侧箭头并进入下一级；叶子节点直接选中
+                currentList.forEach { node ->
+                    val hasChildren = node.children.isNotEmpty()
+                    DropdownMenuItem(
+                        text = { Text(node.label) },
+                        trailingIcon = if (hasChildren) {
+                            { Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = Color(0xFF9CA3AF)) }
+                        } else null,
+                        onClick = {
+                            if (hasChildren) {
+                                path = path + node
+                            } else {
+                                onValueChange(node.value)
+                                expanded = false
+                                path = emptyList()
+                            }
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -691,27 +742,48 @@ private fun DropdownField(
  * Input field component for text inputs
  */
 @Composable
+/**
+ * InputField
+ *
+ * 通用输入框组件。
+ * 对于第二步中的 Quantity（key = "defectQuantity"），
+ * 采取以下约束：
+ * - 弹出数字键盘（KeyboardType.Number）
+ * - 仅允许输入数字和单个小数点（匹配 ^\d*\.?\d*$）
+ */
 private fun InputField(
     field: StructuralDefectField,
     value: String,
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isQuantity = field.key == "defectQuantity" || field.type == "number"
+    val quantityRegex = Regex("^\\d*\\.?\\d*$")
+
     OutlinedTextField(
-         value = value,
-         onValueChange = onValueChange,
-         placeholder = { Text(field.placeholder ?: "") },
-         modifier = modifier.fillMaxWidth(),
-         keyboardOptions = if (field.type == "number") {
-             KeyboardOptions(keyboardType = KeyboardType.Number)
-         } else {
-             KeyboardOptions.Default
-         },
-         colors = OutlinedTextFieldDefaults.colors(
-             focusedBorderColor = Color(0xFF1565C0),
-             unfocusedBorderColor = Color(0xFFE0E0E0)
-         )
-     )
+        value = value,
+        onValueChange = { newValue ->
+            if (isQuantity) {
+                // 仅允许数字与单个小数点；空字符串允许用于删除回退
+                if (newValue.isEmpty() || quantityRegex.matches(newValue)) {
+                    onValueChange(newValue)
+                }
+            } else {
+                onValueChange(newValue)
+            }
+        },
+        placeholder = { Text(field.placeholder ?: "") },
+        modifier = modifier.fillMaxWidth(),
+        keyboardOptions = if (isQuantity) {
+            KeyboardOptions(keyboardType = KeyboardType.Number)
+        } else {
+            KeyboardOptions.Default
+        },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color(0xFF1565C0),
+            unfocusedBorderColor = Color(0xFFE0E0E0)
+        )
+    )
 }
 
 /**

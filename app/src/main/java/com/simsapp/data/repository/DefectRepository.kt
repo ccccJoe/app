@@ -60,4 +60,21 @@ class DefectRepository @Inject constructor(
 
     /** Decrement event_count for a defect by defect_id. */
     suspend fun decrementEventCount(defectId: Long) = dao.decrementEventCount(defectId)
+
+    /** Persist ordered defectNos into sort_order for the given project. */
+    suspend fun updateSortOrders(projectUid: String, orderedDefectNos: List<String>) {
+        orderedDefectNos.forEachIndexed { index, defectNo ->
+            dao.updateSortOrder(projectUid = projectUid, defectNo = defectNo, sortOrder = index)
+        }
+    }
+
+    /**
+     * 统计：指定项目 UID 列表下的缺陷总数（用于 Historical Defects）。
+     */
+    fun countDefectsByProjectUids(projectUids: List<String>): Flow<Int> = dao.countByProjectUids(projectUids)
+
+    /**
+     * 统计：指定项目 UID 列表下 event_count > 0 的缺陷数量（用于 Linked Events）。
+     */
+    fun countLinkedDefectsByProjectUids(projectUids: List<String>): Flow<Int> = dao.countLinkedByProjectUids(projectUids)
 }

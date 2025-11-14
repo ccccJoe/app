@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  File: app_logo_foreground_inset.xml
+  Purpose: Inset wrapper for app_logo_foreground to keep content within
+           adaptive icon safe area across OEM masks (circle/squircle).
+  Author: SIMS Team
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="12dp"
+    android:drawable="@drawable/app_logo_foreground" />

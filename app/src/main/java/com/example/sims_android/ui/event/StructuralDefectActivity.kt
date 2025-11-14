@@ -20,12 +20,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -255,13 +261,13 @@ private fun SingleFieldRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Text(
             text = field.label,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = Color(0xFF5F6B7A),
             modifier = Modifier.padding(bottom = 8.dp)
         )
         
@@ -291,6 +297,12 @@ private fun SingleFieldRow(
                 )
             }
         }
+
+        // 非下拉字段，统一在字段下方保留灰色分割线
+        if (field.type != "select") {
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(thickness = 1.dp, color = Color(0xFFEAEFF4))
+        }
     }
 }
 
@@ -310,6 +322,10 @@ private fun DropdownField(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // 是否为树形下拉
+    val isTree = field.treeOptions.isNotEmpty()
+    // 当前导航层级路径（用于树形下拉）
+    var path by remember { mutableStateOf(listOf<com.simsapp.ui.event.OptionNode>()) }
     
     // 调试日志
     LaunchedEffect(value) {
@@ -321,35 +337,110 @@ private fun DropdownField(
         onExpandedChange = { expanded = !expanded },
         modifier = modifier
     ) {
-        OutlinedTextField(
-             value = value,
-             onValueChange = { },
-             readOnly = true,
-             placeholder = { Text(field.placeholder ?: "Select") },
-             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-             modifier = Modifier
-                 .fillMaxWidth()
-                 .menuAnchor(),
-             colors = OutlinedTextFieldDefaults.colors(
-                 focusedBorderColor = Color(0xFF1565C0),
-                 unfocusedBorderColor = Color(0xFFE0E0E0)
-             )
-         )
+        // 将“选择框 + 底部分割线”作为菜单锚点，保证弹层出现时不遮挡分割线
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor()
+        ) {
+            TextField(
+                value = value,
+                onValueChange = { },
+                readOnly = true,
+                placeholder = { Text(field.placeholder ?: "Select here", color = Color(0xFF9CA3AF)) },
+                trailingIcon = {
+                    CompositionLocalProvider(LocalContentColor provides Color(0xFF6B7280)) {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = TextFieldDefaults.colors(
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                    errorIndicatorColor = Color.Transparent,
+                    cursorColor = Color(0xFF1565C0),
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White
+                )
+            )
+            // 分割线位置上移，紧贴选择框底部；展开时改为蓝色
+            Spacer(modifier = Modifier.height(4.dp))
+            HorizontalDivider(
+                thickness = 1.dp,
+                color = if (expanded) Color(0xFF0F4C81) else Color(0xFFEAEFF4)
+            )
+        }
+        // 取消外层蓝线，改为在下拉菜单内部顶部显示
         
         ExposedDropdownMenu(
             expanded = expanded,
-            onDismissRequest = { expanded = false }
+            onDismissRequest = { expanded = false },
+            shape = RoundedCornerShape(12.dp),
+            shadowElevation = 8.dp,
+            tonalElevation = 0.dp,
+            modifier = Modifier
+                .shadow(8.dp, RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.White)
         ) {
-            field.options?.forEach { option ->
-                 DropdownMenuItem(
-                     text = { Text(option) },
-                     onClick = {
-                         println("DropdownField [${field.key}]: Selected option = '$option'")
-                         onValueChange(option)
-                         expanded = false
-                     }
-                 )
-             }
+            if (!isTree) {
+                // 普通下拉：使用扁平 options
+                field.options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option, color = Color(0xFF111827)) },
+                        onClick = {
+                            println("DropdownField [${field.key}]: Selected option = '$option'")
+                            onValueChange(option)
+                            expanded = false
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    )
+                }
+            } else {
+                // 树形下拉：根据 path 决定当前显示的节点列表
+                val currentList = if (path.isEmpty()) field.treeOptions else path.last().children
+
+                // 当在子级时，显示“返回”头部
+                if (path.isNotEmpty()) {
+                    DropdownMenuItem(
+                        leadingIcon = { Icon(Icons.Filled.ArrowBack, contentDescription = "Back", tint = Color(0xFF546E7A)) },
+                        text = { Text(path.last().label, color = Color(0xFF1565C0)) },
+                        onClick = {
+                            path = path.dropLast(1)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    )
+                }
+
+                // 列表项：有 children 的显示右侧箭头并进入下一级；叶子节点直接选中
+                currentList.forEach { node ->
+                    val hasChildren = node.children.isNotEmpty()
+                    DropdownMenuItem(
+                        text = { Text(node.label, color = Color(0xFF111827)) },
+                        trailingIcon = if (hasChildren) {
+                            { Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = Color(0xFF9CA3AF)) }
+                        } else null,
+                        onClick = {
+                            if (hasChildren) {
+                                path = path + node
+                            } else {
+                                println("DropdownField [${field.key}]: Selected node = '${node.value}'")
+                                onValueChange(node.value)
+                                expanded = false
+                                path = emptyList()
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -368,21 +459,46 @@ private fun InputField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    OutlinedTextField(
-         value = value,
-         onValueChange = onValueChange,
-         placeholder = { Text(field.placeholder ?: "") },
-         modifier = modifier.fillMaxWidth(),
-         keyboardOptions = if (field.type == "number") {
-             KeyboardOptions(keyboardType = KeyboardType.Number)
-         } else {
-             KeyboardOptions.Default
-         },
-         colors = OutlinedTextFieldDefaults.colors(
-             focusedBorderColor = Color(0xFF1565C0),
-             unfocusedBorderColor = Color(0xFFE0E0E0)
-         )
-     )
+    // 针对数量等数字类型字段，拦截非数字输入，仅允许数字和单个小数点
+    // 同时将区域键盘中的逗号自动转换为小数点，确保数值格式统一
+    TextField(
+        value = value,
+        onValueChange = { newValue ->
+            // 判断是否为数字字段：类型为 number，或 key/label 包含 quantity
+            val isNumericField = field.type == "number" ||
+                    field.key.contains("quantity", ignoreCase = true) ||
+                    field.label.contains("quantity", ignoreCase = true)
+
+            if (!isNumericField) {
+                onValueChange(newValue)
+            } else {
+                // 去除空格，逗号统一转为点
+                val sanitized = newValue.replace(" ", "").replace(',', '.')
+                // 只允许数字 + 单个小数点（可为空字符串以支持清空）
+                val numericRegex = Regex("^\\d*(?:\\.\\d*)?$")
+                if (sanitized.isEmpty() || numericRegex.matches(sanitized)) {
+                    onValueChange(sanitized)
+                }
+                // 非法输入直接忽略，从而避免出现例如 7,55,85-3 这类非规范内容
+            }
+        },
+        placeholder = { Text(field.placeholder ?: "", color = Color(0xFF9CA3AF)) },
+        modifier = modifier.fillMaxWidth(),
+        keyboardOptions = if (field.type == "number") {
+            KeyboardOptions(keyboardType = KeyboardType.Number)
+        } else {
+            KeyboardOptions.Default
+        },
+        colors = TextFieldDefaults.colors(
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
+            errorIndicatorColor = Color.Transparent,
+            cursorColor = Color(0xFF1565C0),
+            focusedContainerColor = Color.White,
+            unfocusedContainerColor = Color.White
+        )
+    )
 }
 
 /**
@@ -495,28 +611,15 @@ fun StructuralDefectScreen(
     val isLastStep = currentStepIndex == steps.size - 1
     
     Scaffold(
+        containerColor = Color.White,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "Structural Defect Details",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onCancel) {
-                        Icon(
-                            imageVector = Icons.Default.ArrowBack,
-                            contentDescription = "Back"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color(0xFF1565C0),
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
-                )
+            // 顶部栏样式：采用浅色背景与深色文字，贴近图二风格（居中标题 + 标准返回图标）
+            com.simsapp.ui.common.AppTopBar(
+                title = "Structural Defect Details",
+                onBack = onCancel,
+                containerColor = Color.White,
+                titleColor = MaterialTheme.colorScheme.onSurface,
+                navigationIconColor = MaterialTheme.colorScheme.onSurface
             )
         },
         bottomBar = {
@@ -527,7 +630,7 @@ fun StructuralDefectScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     // 上一步按钮
@@ -537,13 +640,19 @@ fun StructuralDefectScreen(
                                 currentStep = steps[currentStepIndex - 1]
                             },
                             colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color(0xFF1565C0)
-                            )
+                                contentColor = Color(0xFF0F4C81),
+                                containerColor = Color.White
+                            ),
+                            border = null,
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .height(40.dp)
+                                .width(140.dp)
                         ) {
                             Text("Previous")
                         }
                     } else {
-                        Spacer(modifier = Modifier.width(80.dp))
+                        Spacer(modifier = Modifier.width(140.dp))
                     }
                     
                     // 下一步/完成按钮
@@ -556,8 +665,13 @@ fun StructuralDefectScreen(
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF1565C0)
-                        )
+                            containerColor = Color(0xFF0F4C81),
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier
+                            .height(40.dp)
+                            .width(140.dp)
                     ) {
                         if (isLastStep) {
                             Icon(
@@ -579,22 +693,39 @@ fun StructuralDefectScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp)
         ) {
             // 当前步骤标题
-            Text(
-                text = currentStep.title,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF1565C0),
-                modifier = Modifier.padding(bottom = 16.dp)
+            // 文件级注释：此处展示图二样式的步骤指示（x/5 + 标题）
+            // 类级注释：页面头部采用更明确的步骤进度文案，满足新样式需求
+            // 函数级注释：在每一步顶部显示“当前步/总步数 + 步骤标题”，不影响原有流程
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val totalSteps = steps.size
+                Text(
+                    text = "${currentStepIndex + 1}/$totalSteps ${currentStep.title}",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            // 在步骤标题下方加入浅色分隔线与灰色间隔模块，增强模块化层级
+            HorizontalDivider(thickness = 1.dp, color = Color(0xFFE5E7EB), modifier = Modifier.padding(horizontal = 16.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .background(Color(0xFFF3F4F6))
             )
             
             // 表单内容
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)
             ) {
                 val fieldsForStep = getFieldsForStep(currentStep)
                 
@@ -614,22 +745,28 @@ fun StructuralDefectScreen(
                     )
                 }
 
-                // 底部总结卡片
+                // 底部总结模块（去卡片样式，改为纯白模块）
                 item {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Card(
-                        shape = RoundedCornerShape(10.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F7FB)),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    // 模块间灰色背景间隔，贴近设计图的分区效果
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 8.dp)
+                            .height(8.dp)
+                            .background(Color(0xFFF3F4F6))
+                    )
+                    // 去掉 Summary 顶部多余分隔线，保持纯白模块
+                    // 纯白背景模块，与表单一致的左右留白
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                            .background(Color.White)
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
+                        Column(modifier = Modifier.padding(vertical = 16.dp)) {
                             Text(
                                 text = "Summary",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = Color(0xFF1565C0),
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Spacer(modifier = Modifier.height(8.dp))

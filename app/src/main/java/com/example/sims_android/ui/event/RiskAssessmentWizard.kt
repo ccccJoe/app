@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.simsapp.data.repository.ProjectRepository
@@ -152,14 +153,23 @@ typealias RiskMatrixLoader = suspend () -> Result<RiskMatrixUI>
 
 /**
  * Composable: RiskAssessmentWizardDialog
- * - 按产品要求从远程下载风险矩阵配置，生成 5 个问题：
- *   1-4题：来自 consequenceData 每个元素的 cost / productionLoss / safety / other 字段，外加 Not applicable；分值为对应元素的 severity_factor
- *   5题：来自 likelihoodData 的 criteria 文本，分值为 likelihood_factor
- * - Not applicable 最多允许选择 3 次
- * - 风险等级计算：max(前四题分值) * 第五题分值，按 priorityData 的 criteria 区间匹配，区间符号 [ ] 为含，( ) 为不含
+ * 功能：风险矩阵评估弹窗（5步问答）。
  *
- * @param onDismiss 关闭回调，返回结果或 null
- * @param loader 远程配置加载函数，默认不提供实现方需传入
+ * - 数据来源：通过 `loader` 异步加载风险矩阵配置。
+ * - 预选与回显：支持两种本地缓存格式的回显：
+ *   1) 旧版 `initialAnswers: List<RiskAnswer>`（每步选项索引）
+ *   2) 新版 `initialAssessmentData: RiskAssessmentData`（字段为文本值）
+ * - 行为约束：
+ *   - 前四题允许选择 "Not applicable"，最多 3 次；第五题无 NA。
+ *   - 计算分值使用前三题的最大值与第五题的概率因子，映射到优先级。
+ *
+ * 参数：
+ * - `onDismiss` 关闭回调，返回结果或 null
+ * - `loader` 远程配置加载函数
+ * - `initialAnswers` 旧版答案列表，用于回显
+ * - `initialAssessmentData` 新版对象格式答案，用于回显
+ * - `projectUid` 项目UID，用于获取风险矩阵ID
+ * - `projectDigitalAssetDao` 数字资产DAO，用于查询风险矩阵资产
  */
 @Composable
 fun RiskAssessmentWizardDialog(
@@ -167,6 +177,8 @@ fun RiskAssessmentWizardDialog(
     loader: RiskMatrixLoader? = null,
     // initialAnswers: 上次保存的答案列表，用于在弹窗中预选各步骤的选项，提升编辑体验
     initialAnswers: List<RiskAnswer>? = null,
+    // initialAssessmentData: 新的对象格式答案，用于在弹窗中预选（优先级低于 initialAnswers）
+    initialAssessmentData: RiskAssessmentData? = null,
     // projectUid: 项目UID，用于获取风险矩阵ID
     projectUid: String? = null,
     // projectDigitalAssetDao: 数字资产DAO，用于查询风险矩阵资产
@@ -211,6 +223,9 @@ fun RiskAssessmentWizardDialog(
      * @param projectUid 项目UID，用于获取风险矩阵ID
      * @param projectDigitalAssetDao 数字资产DAO，用于查询风险矩阵资产
      * @return RiskAssessmentResult 包含 level / score / answers（answers 可为空以兼容旧数据）
+     * 注：自本次修改起，`assessmentData` 中的 `risk_cost`、`risk_safety`、`risk_other`、
+     * `risk_potential_production_loss`、`risk_likelihood` 字段均保存“用户选择的显示文本”，
+     * 而非评分数值字符串；兼容旧数据的回显逻辑已在弹窗内实现（文本优先、数值兜底）。
      */
     suspend fun computeResult(
         selections: List<Int?>,
@@ -246,16 +261,16 @@ fun RiskAssessmentWizardDialog(
                     val item = p.consequenceData[sel]
                     when (step) {
                         0 -> item.cost
-                        1 -> item.productionLoss
-                        2 -> item.safety
-                        else -> item.other
+                        1 -> item.safety
+                        2 -> item.other
+                        else -> item.productionLoss
                     }
                 } else "Not applicable"
                 val value = if (!isNA) p.consequenceData[sel].severityFactor else 0.0
                 answers.add(
                     RiskAnswer(
                         stepIndex = step + 1,
-                        question = listOf("COST Consequence","Potential Production Loss","SAFETY Consequence","OTHER Consequence")[step],
+                        question = listOf("COST Consequence","SAFETY Consequence","OTHER Consequence","Potential Production Loss")[step],
                         optionIndex = sel,
                         optionText = text,
                         value = value
@@ -298,21 +313,51 @@ fun RiskAssessmentWizardDialog(
         // 获取时间框架
         val timeframe = getActionRequiredTimeframe(s5)
         
-        // 构建新的对象格式数据：使用原始数值字符串（移除无意义的尾随0）
+        // 构建新的对象格式数据：按需求保存“用户选择的文本”，而非评分数值
+        // 说明：
+        // - 前四项（cost/safety/other/production_loss）保存选项的显示文本；若未选择则空字符串；若选择 NA 则 "Not applicable"
+        // - 第五项（likelihood）优先保存 criteria 文本，若为空则回退为数值字符串
         val assessmentData = RiskAssessmentData(
-            risk_cost = (selections.getOrNull(0)?.let { sel ->
-                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
-            } ?: 0.0).toRawString(),
-            risk_safety = (selections.getOrNull(1)?.let { sel ->
-                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
-            } ?: 0.0).toRawString(),
-            risk_other = (selections.getOrNull(2)?.let { sel ->
-                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
-            } ?: 0.0).toRawString(),
-            risk_potential_production_loss = (selections.getOrNull(3)?.let { sel ->
-                if (sel in p.consequenceData.indices) p.consequenceData[sel].severityFactor else 0.0
-            } ?: 0.0).toRawString(),
-            risk_likelihood = s5.toRawString(),
+            risk_cost = run {
+                val sel = selections.getOrNull(0)
+                when {
+                    sel == null -> ""
+                    sel !in p.consequenceData.indices -> "Not applicable"
+                    else -> p.consequenceData[sel].cost
+                }
+            },
+            risk_safety = run {
+                val sel = selections.getOrNull(1)
+                when {
+                    sel == null -> ""
+                    sel !in p.consequenceData.indices -> "Not applicable"
+                    else -> p.consequenceData[sel].safety
+                }
+            },
+            risk_other = run {
+                val sel = selections.getOrNull(2)
+                when {
+                    sel == null -> ""
+                    sel !in p.consequenceData.indices -> "Not applicable"
+                    else -> p.consequenceData[sel].other
+                }
+            },
+            risk_potential_production_loss = run {
+                val sel = selections.getOrNull(3)
+                when {
+                    sel == null -> ""
+                    sel !in p.consequenceData.indices -> "Not applicable"
+                    else -> p.consequenceData[sel].productionLoss
+                }
+            },
+            risk_likelihood = run {
+                val sel = selections.getOrNull(4)
+                if (sel != null && sel in p.likelihoodData.indices) {
+                    p.likelihoodData[sel].criteria ?: p.likelihoodData[sel].likelihoodFactor.toRawString()
+                } else {
+                    ""
+                }
+            },
             risk_rating = level,
             risk_action_required_remediation_timeframe = timeframe,
             risk_matrix_id = riskMatrixId
@@ -357,18 +402,25 @@ fun RiskAssessmentWizardDialog(
                             // 构造 5 步问题
                             data class Step(val title: String, val options: List<String>, val valueProvider: (Int) -> Double)
                             val notApplicable = "Not applicable"
+                            // 前四题顺序调整为：COST、SAFETY、OTHER、PRODUCTION LOSS
+                            val consequenceTitles = listOf(
+                                "COST Consequence",
+                                "SAFETY Consequence",
+                                "OTHER Consequence",
+                                "Potential Production Loss"
+                            )
                             val consequenceOptions = List(4) { idx ->
-                                // 对应 cost/productionLoss/safety/other
+                                // 按新顺序映射到 consequenceData 的字段
                                 val labelProvider: (ConsequenceItemUI) -> String = when (idx) {
                                     0 -> { it -> it.cost }
-                                    1 -> { it -> it.productionLoss }
-                                    2 -> { it -> it.safety }
-                                    else -> { it -> it.other }
+                                    1 -> { it -> it.safety }
+                                    2 -> { it -> it.other }
+                                    else -> { it -> it.productionLoss }
                                 }
                                 val opts = p.consequenceData.map(labelProvider) + notApplicable
                                 val valueProvider: (Int) -> Double = { i -> if (i < p.consequenceData.size) p.consequenceData[i].severityFactor else 0.0 }
                                 Step(
-                                    title = listOf("COST Consequence","Potential Production Loss","SAFETY Consequence","OTHER Consequence")[idx],
+                                    title = consequenceTitles[idx],
                                     options = opts,
                                     valueProvider = valueProvider
                                 )
@@ -385,20 +437,80 @@ fun RiskAssessmentWizardDialog(
                             var naCount by remember { mutableStateOf(0) }
                             var isComputing by remember { mutableStateOf(false) }
 
-                            // 根据 initialAnswers 进行预选与 NA 次数回显
-                            LaunchedEffect(initialAnswers, p) {
+                            // 根据 initialAnswers 和 initialAssessmentData 进行预选与 NA 次数回显
+                            LaunchedEffect(initialAnswers, initialAssessmentData, p) {
+                                // 1) 旧版：优先使用 initialAnswers（包含明确的选项索引）
                                 if (!initialAnswers.isNullOrEmpty()) {
+                                    // 若历史答案中包含 question 文本，按文本匹配到当前新顺序的步骤索引；否则回退使用 stepIndex
                                     initialAnswers.forEach { ans ->
-                                        val stepIdx = ans.stepIndex - 1
-                                        if (stepIdx in selections.indices) {
-                                            selections[stepIdx] = ans.optionIndex
+                                        val matchedStepIdx = consequenceTitles.indexOf(ans.question).takeIf { it >= 0 }
+                                            ?: (ans.stepIndex - 1)
+                                        if (matchedStepIdx in selections.indices) {
+                                            selections[matchedStepIdx] = ans.optionIndex
                                         }
                                     }
-                                    // 统计前四题 NA 次数（索引等于 consequenceData.size 视为 NA）
-                                    naCount = (0 until minOf(4, selections.size)).count { sIdx ->
-                                        val sel = selections[sIdx]
-                                        sel != null && sel >= p.consequenceData.size
+                                } else if (initialAssessmentData != null) {
+                                    // 2) 新版：对象格式，根据文本匹配到各题的选项索引
+                                    try {
+                                        // 前四题：COST / SAFETY / OTHER / PRODUCTION LOSS（新顺序）
+                                        val textMatchers = listOf(
+                                            initialAssessmentData.risk_cost,
+                                            initialAssessmentData.risk_safety,
+                                            initialAssessmentData.risk_other,
+                                            initialAssessmentData.risk_potential_production_loss
+                                        )
+                                        for (stepIdx in 0 until 4) {
+                                            val text = textMatchers.getOrNull(stepIdx)?.trim()
+                                            if (text.isNullOrEmpty()) continue
+                                            // 优先匹配具体项；若为 "Not applicable" 则选中 NA
+                                            var matchIndex: Int? = if (text.equals("Not applicable", ignoreCase = true)) {
+                                                p.consequenceData.size // NA 索引为末尾
+                                            } else {
+                                                val idxByText = when (stepIdx) {
+                                                    0 -> p.consequenceData.indexOfFirst { it.cost.equals(text, ignoreCase = true) }
+                                                    1 -> p.consequenceData.indexOfFirst { it.safety.equals(text, ignoreCase = true) }
+                                                    2 -> p.consequenceData.indexOfFirst { it.other.equals(text, ignoreCase = true) }
+                                                    else -> p.consequenceData.indexOfFirst { it.productionLoss.equals(text, ignoreCase = true) }
+                                                }
+                                                if (idxByText >= 0) idxByText else null
+                                            }
+                                            // 兼容：若文本匹配失败，尝试按数值字符串匹配 severityFactor
+                                            if (matchIndex == null) {
+                                                val num = text.toDoubleOrNull()
+                                                if (num != null) {
+                                                    val idxByValue = p.consequenceData.indexOfFirst { kotlin.math.abs(it.severityFactor - num) < 1e-9 }
+                                                    if (idxByValue >= 0) matchIndex = idxByValue
+                                                }
+                                            }
+                                            if (matchIndex != null && stepIdx in selections.indices) {
+                                                selections[stepIdx] = matchIndex
+                                            }
+                                        }
+                                        // 第五题：概率（criteria 文本）
+                                        val likelihoodText = initialAssessmentData.risk_likelihood?.trim()
+                                        if (!likelihoodText.isNullOrEmpty()) {
+                                            var li = p.likelihoodData.indexOfFirst {
+                                                (it.criteria ?: "").equals(likelihoodText, ignoreCase = true)
+                                            }
+                                            // 兼容：若文本匹配失败，尝试按数值字符串匹配 likelihoodFactor
+                                            if (li < 0) {
+                                                val num = likelihoodText.toDoubleOrNull()
+                                                if (num != null) {
+                                                    li = p.likelihoodData.indexOfFirst { kotlin.math.abs(it.likelihoodFactor - num) < 1e-9 }
+                                                }
+                                            }
+                                            if (li >= 0 && 4 in selections.indices) {
+                                                selections[4] = li
+                                            }
+                                        }
+                                    } catch (_: Exception) {
+                                        // 静默失败，避免影响弹窗展示
                                     }
+                                }
+                                // 统计前四题 NA 次数（索引等于 consequenceData.size 视为 NA）
+                                naCount = (0 until minOf(4, selections.size)).count { sIdx ->
+                                    val sel = selections[sIdx]
+                                    sel != null && sel >= p.consequenceData.size
                                 }
                             }
 
@@ -655,6 +767,45 @@ fun RiskResultBar(
         Spacer(Modifier.height(8.dp))
         // 主显示：P1~P4；score 直接显示 Double 原值
         Text(text = "评估结果：${result.level} (score=${result.score})", color = Color(0xFF37474F))
+    }
+}
+
+/**
+ * Composable: RiskResultPill
+ * 文件级说明：在有评估结果时，以图片示例所示的绿色圆角胶囊展示主结果。
+ * - 背景颜色根据等级动态变化：P1 红、P2 橙、P3 黄、P4 绿；图示为 P4 绿色。
+ * - 居中显示文本 "Px (score)"，白色文字。
+ *
+ * @param result 风险评估结果对象，包含 `level` 与 `score`
+ * @param modifier 外部布局修饰符
+ */
+@Composable
+fun RiskResultPill(
+    result: RiskAssessmentResult,
+    modifier: Modifier = Modifier
+) {
+    // 根据等级选择颜色（尽量贴近参考图）
+    val bg = when (result.level) {
+        "P1" -> Color(0xFFD32F2F)
+        "P2" -> Color(0xFFFF7043)
+        "P3" -> Color(0xFFFFC107)
+        else -> Color(0xFF00C853) // P4 / 默认：绿色
+    }
+
+    Box(
+        modifier = modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(bg),
+        contentAlignment = Alignment.Center
+    ) {
+        // 显示结果：例如 P4 (3.0)
+        Text(
+            text = "${result.level} (${String.format("%.1f", result.score)})",
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

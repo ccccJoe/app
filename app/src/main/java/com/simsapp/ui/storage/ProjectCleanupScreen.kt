@@ -10,7 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -44,20 +44,15 @@ fun ProjectCleanupScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showConfirmDialog by remember { mutableStateOf(false) }
 
+    // 顶部栏与整体布局：将标题栏背景调整为深蓝，并缩小标题与图标尺寸
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Clean Up Projects") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+            com.simsapp.ui.common.AppTopBar(
+                title = "Clean Up Projects",
+                onBack = onNavigateBack,
+                containerColor = Color(0xFF0B2E66),
+                titleColor = Color.White,
+                navigationIconColor = Color.White
             )
         },
         bottomBar = {

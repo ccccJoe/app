@@ -4,15 +4,23 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableIntStateOf
@@ -41,11 +49,16 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.itemsIndexed
+// Removed ExperimentalFoundationApi and animateItemPlacement to avoid unresolved reference on older Compose versions
 // 移除重复的导入语句
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -82,10 +95,12 @@ import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.zIndex
 import com.simsapp.data.local.entity.DefectEntity
 import com.simsapp.data.local.entity.EventEntity
 import com.simsapp.data.local.entity.ProjectEntity
 import com.simsapp.ui.common.RiskTagColors
+import com.simsapp.ui.common.ProjectPickerBottomSheet
 
 /**
  * 风险等级标签组件
@@ -126,7 +141,7 @@ private fun RiskLevelTag(
  * Author: SIMS-Android Development Team
  */
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ProjectDetailScreen(
     projectName: String,
@@ -157,6 +172,22 @@ fun ProjectDetailScreen(
     val selectedEventIds = remember { mutableStateListOf<String>() }
     // 新增：逐项上传中的 ID 集合，用于在标题前显示转圈
     val uploadingIds = remember { mutableStateListOf<String>() }
+    // 新增：在切换 Tab 前记录是否处于吸顶，以及希望保持的偏移量
+    var forceStickOnTabChange by remember { mutableStateOf(false) }
+    var stickOffsetOnChange by remember { mutableStateOf(0) }
+
+    // 新增：非完成项目列表（用于项目选择弹窗）
+    val notFinishedProjects by viewModel.getNotFinishedProjects().collectAsState(initial = emptyList())
+    // 新增：项目选择底部弹窗显隐控制
+    var showProjectPicker by remember { mutableStateOf(false) }
+    // 新增：待同步的单个事件ID（弹窗确认后执行）
+    var pendingSingleSyncEventId by remember { mutableStateOf<String?>(null) }
+    // 新增：待同步的批量事件ID列表（弹窗确认后执行）
+    val pendingBatchEventIds = remember { mutableStateListOf<String>() }
+    // 新增：批量同步进度收集（用于底部显示 Synced x/y）
+    val syncProgress by viewModel.eventSyncProgress.collectAsState(
+        ProjectDetailViewModel.SyncProgress(0, 0, false)
+    )
 
     // 新增：收集历史缺陷列表（仅包含 no 和 risk_rating），并在进入页面时根据 projectUid 触发加载
     val defects by viewModel.historyDefects.collectAsState(emptyList())
@@ -177,226 +208,339 @@ fun ProjectDetailScreen(
         viewModel.loadEventsByProjectUid(projectUid)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF6F7FB))
-    ) {
-        OverviewCard(
-            projectName = projectName,
-            projectDescription = projectDescription,
-            isDescriptionExpanded = isDescriptionExpanded,
-            onToggleDescription = { isDescriptionExpanded = !isDescriptionExpanded },
-            onCreateEvent = onCreateEvent,
-            // 传递：打开项目详情（键值信息）
-            onOpenProjectInfo = onOpenProjectInfo
-        )
+    // 控制是否已滚动至概览模块之外，用于动态切换顶部标题为项目名
+    var isListScrolled by remember { mutableStateOf(false) }
+    val pageListState = rememberLazyListState()
+    // 监听整页滚动：当第一个可见项不是概览（index > 0）时认为项目内容不可见
+    LaunchedEffect(pageListState) {
+        snapshotFlow { pageListState.firstVisibleItemIndex > 0 }
+            .distinctUntilChanged()
+            .collect { isListScrolled = it }
+    }
 
-        TabRow(
-            selectedTabIndex = selectedTab,
-            containerColor = Color.White,
-            contentColor = Color(0xFF1976D2),
-            indicator = { }, // 移除底部指示器
-            divider = { } // 移除分割线
-        ) {
-            Tab(
-                selected = selectedTab == 0, 
-                onClick = { selectedTab = 0 },
-                modifier = Modifier.background(
-                    color = if (selectedTab == 0) Color(0xFFE3F2FD) else Color.Transparent,
-                    shape = RoundedCornerShape(4.dp)
-                ),
-                text = { 
-                    Text(
-                        "Historical Defects",
-                        fontSize = 14.sp,
-                        fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal,
-                        color = if (selectedTab == 0) Color(0xFF1976D2) else Color(0xFF666666)
-                    ) 
-                }
-            )
-            Tab(
-                selected = selectedTab == 1, 
-                onClick = { selectedTab = 1 },
-                modifier = Modifier.background(
-                    color = if (selectedTab == 1) Color(0xFFE3F2FD) else Color.Transparent,
-                    shape = RoundedCornerShape(4.dp)
-                ),
-                text = { 
-                    Text(
-                        "Events",
-                        fontSize = 14.sp,
-                        fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal,
-                        color = if (selectedTab == 1) Color(0xFF1976D2) else Color(0xFF666666)
-                    ) 
-                }
-            )
+    // 修复：当 tabs 已吸顶时，切换另一个 tab 仍应保持吸顶。
+    // 使用 LaunchedEffect(selectedTab) 在切换后（完成重组与测量）将父级 LazyColumn
+    // 定位到 stickyHeader 的 index=1，并保留当前滚动偏移，避免跳回顶部显示概览模块。
+    LaunchedEffect(selectedTab) {
+        if (forceStickOnTabChange) {
+            // 切换后强制保持吸顶：滚到 stickyHeader，使用记录的偏移（默认 0）
+            pageListState.scrollToItem(1, stickOffsetOnChange)
+            forceStickOnTabChange = false
         }
+    }
 
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp) // 减少内边距以增大内容显示区域
-        ) {
-            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
-                // 将搜索框和按钮放在同一行，完全匹配图片设计
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp), // 进一步减少Row内部的padding
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp) // 减小间距
-                ) {
-                    // 搜索框样式匹配图片
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(38.dp)
-                            .border(
-                                width = 1.dp,
-                                color = Color(0xFFE0E0E0),
-                                shape = RoundedCornerShape(4.dp)
-                            )
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.CenterStart
+    Scaffold(
+        topBar = {
+            com.simsapp.ui.common.AppTopBar(
+                title = if (isListScrolled) projectName.ifBlank { "Project" } else "Project",
+                onBack = onBack,
+                containerColor = Color(0xFF0B2E66),
+                titleColor = Color.White,
+                navigationIconColor = Color.White,
+                actions = {
+                    // 顶部导航栏最右侧：New 文本胶囊按钮，触发创建事件
+                    Surface(
+                        color = Color.White,
+                        shape = RoundedCornerShape(18.dp)
                     ) {
-                        BasicTextField(
-                            value = if (selectedTab == 0) defectSearchText else eventSearchText,
-                            onValueChange = { text ->
-                                if (selectedTab == 0) {
-                                    defectSearchText = text
-                                } else {
-                                    eventSearchText = text
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            textStyle = LocalTextStyle.current.copy(
-                                fontSize = 13.sp,
-                                color = Color(0xFF333333)
-                            ),
-                            cursorBrush = SolidColor(Color(0xFF1976D2))
+                        Text(
+                            text = "New",
+                            color = Color(0xFF0B2E66),
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .clickable { onCreateEvent() }
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
                         )
-                        if ((selectedTab == 0 && defectSearchText.isEmpty()) || (selectedTab == 1 && eventSearchText.isEmpty())) {
-                            Text(
-                                text = "Search",
-                                fontSize = 13.sp,
-                                color = Color(0xFF999999)
-                            )
-                        }
                     }
-                    
-                    // 按钮样式匹配图片中的灰色矩形按钮
-                    if (selectedTab == 0) {
-                        // Sort按钮，启用点击功能
-                        Button(
-                            onClick = { 
-                                // 显示排序对话框
-                                showSortDialog = true
-                            },
-                            modifier = Modifier
-                                .height(38.dp) // 与搜索框高度保持一致
-                                .width(60.dp), // 固定宽度
-                            shape = RoundedCornerShape(4.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            ),
-                            contentPadding = PaddingValues(0.dp)
-                        ) { 
-                            Text(
-                                "Sort", 
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Normal
-                            ) 
-                        }
-                    } else {
-                        // Sync按钮，保持原有样式但调整尺寸
-                        Button(
-                            onClick = {
-                                isEventSelectMode = true
-                                selectedEventIds.clear()
-                            },
-                            modifier = Modifier
-                                .height(38.dp) // 与搜索框高度保持一致
-                                .width(60.dp), // 固定宽度
-                            shape = RoundedCornerShape(4.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            ),
-                            contentPadding = PaddingValues(0.dp)
-                        ) { 
-                            Text(
-                                "Sync", 
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Normal
-                            ) 
-                        }
-                    }
+                    Spacer(modifier = Modifier.width(8.dp))
                 }
-                // 移除排序模式相关的提示文本
-            }
+            )
         }
-
-        Box(modifier = Modifier.fillMaxSize().weight(1f)) {
-            when (selectedTab) {
-                0 -> HistoryDefectList(
-                    searchText = defectSearchText, 
-                    defects = defects, 
-                    onOpenDefect = { no -> onOpenDefect(no) },
-                    onCreateEventForDefect = { defectNo -> 
-                        // 跳转到新建事件页面并自动关联该缺陷
-                        onCreateEventForDefect(defectNo)
-                    }
-                )
-                1 -> EventList(
-                    projectName = projectName,
-                    searchText = eventSearchText,
-                    selectionMode = isEventSelectMode,
-                    selectedIds = selectedEventIds,
-                    onToggle = { id -> if (selectedEventIds.contains(id)) selectedEventIds.remove(id) else selectedEventIds.add(id) },
-                    onOpen = { id -> onOpenEvent(id) },
-                    onSync = { eventId ->
-                        // 单个事件同步逻辑
-                        scope.launch {
-                            // 1) 提示：同步初始化中
-                            Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
-                            // 2) 展示转圈：将当前事件ID标记为上传中
-                            uploadingIds.clear()
-                            uploadingIds.add(eventId)
-                            // 3) 调用单个事件同步方法
-                            runCatching {
-                                // 根据eventId查找对应的EventItem获取uid
-                                val eventItem = events.find { it.id == eventId }
-                                if (eventItem == null) {
-                                    throw IllegalArgumentException("Event not found with id: $eventId")
+    ) { scaffoldPadding ->
+        Box(modifier = Modifier.fillMaxSize().background(Color(0xFFF6F7FB)).padding(scaffoldPadding)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = pageListState
+            ) {
+                // 1) 顶部概览（不固定，随页面滚动）
+                item {
+                    OverviewCard(
+                        projectName = projectName,
+                        projectDescription = projectDescription,
+                        isDescriptionExpanded = isDescriptionExpanded,
+                        onToggleDescription = { isDescriptionExpanded = !isDescriptionExpanded },
+                        onCreateEvent = onCreateEvent,
+                        onOpenProjectInfo = onOpenProjectInfo
+                    )
+                }
+                // 2) Tabs + 搜索：stickyHeader 固定到顶部
+                stickyHeader {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.White)
+                            .zIndex(1f)
+                    ) {
+                        // 自定义无涟漪 Tab 行：完全去除点击背景动态效果
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.White)
+                                .padding(horizontal = 0.dp, vertical = 0.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val interactionA = remember { MutableInteractionSource() }
+                            val interactionB = remember { MutableInteractionSource() }
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .clickable(
+                                        indication = null,
+                                        interactionSource = interactionA
+                                    ) {
+                                        // 记录当前是否已吸顶（index>=1 或存在偏移），供切换后保持位置
+                                        val isSticky = pageListState.firstVisibleItemIndex >= 1 || pageListState.firstVisibleItemScrollOffset > 0
+                                        forceStickOnTabChange = isSticky
+                                        // 吸顶时将偏移重置为 0，保持 tabs 紧贴顶部
+                                        stickOffsetOnChange = 0
+                                        selectedTab = 0
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Historical Defects",
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selectedTab == 0) Color(0xFF2E5EA3) else Color(0xFF666666)
+                                )
+                                if (selectedTab == 0) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .padding(horizontal = 32.dp)
+                                            .height(2.dp)
+                                            .fillMaxWidth()
+                                            .background(Color(0xFF2E5EA3))
+                                    )
                                 }
-                                val result = viewModel.uploadSingleEvent(
-                                eventUid = eventItem.uid, // 使用uid而不是id
-                                projectUid = projectUid ?: ""
-                            )
-                                // 上传完成后清除转圈状态
-                                uploadingIds.clear()
-                                // 显示上传结果
-                                Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
-                            }.onFailure { exception ->
-                                // 失败场景：清除转圈状态并显示错误信息
-                                uploadingIds.clear()
-                                Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .clickable(
+                                        indication = null,
+                                        interactionSource = interactionB
+                                    ) {
+                                        val isSticky = pageListState.firstVisibleItemIndex >= 1 || pageListState.firstVisibleItemScrollOffset > 0
+                                        forceStickOnTabChange = isSticky
+                                        stickOffsetOnChange = 0
+                                        selectedTab = 1
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Events",
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selectedTab == 1) Color(0xFF2E5EA3) else Color(0xFF666666)
+                                )
+                                if (selectedTab == 1) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .padding(horizontal = 32.dp)
+                                            .height(2.dp)
+                                            .fillMaxWidth()
+                                            .background(Color(0xFF2E5EA3))
+                                    )
+                                }
                             }
                         }
-                    },
-                    uploadingIds = uploadingIds,
-                    events = events
-                )
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp)
+                                        .background(Color(0xFFEFF3F8), RoundedCornerShape(18.dp))
+                                        .padding(horizontal = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Search,
+                                        contentDescription = "Search",
+                                        tint = Color(0xFF6F8BAF),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Box(modifier = Modifier.fillMaxWidth()) {
+                                        BasicTextField(
+                                            value = if (selectedTab == 0) defectSearchText else eventSearchText,
+                                            onValueChange = { text ->
+                                                if (selectedTab == 0) defectSearchText = text else eventSearchText = text
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true,
+                                            textStyle = LocalTextStyle.current.copy(
+                                                fontSize = 13.sp,
+                                                color = Color(0xFF333333)
+                                            ),
+                                            cursorBrush = SolidColor(Color(0xFF1976D2))
+                                        )
+                                        if ((selectedTab == 0 && defectSearchText.isEmpty()) || (selectedTab == 1 && eventSearchText.isEmpty())) {
+                                            Text(
+                                                text = "Search",
+                                                fontSize = 13.sp,
+                                                color = Color(0xFF9AA8B9)
+                                            )
+                                        }
+                                    }
+                                }
+                                if (selectedTab == 0) {
+                                    Surface(color = Color(0xFFEFF3F8), shape = RoundedCornerShape(18.dp)) {
+                                        IconButton(onClick = { showSortDialog = true }, modifier = Modifier.size(38.dp)) {
+                                            Icon(imageVector = Icons.Filled.SwapVert, contentDescription = "Sort", tint = Color(0xFF6F8BAF))
+                                        }
+                                    }
+                                } else {
+                                    if (isEventSelectMode) {
+                                        val visibleIds = remember(events, eventSearchText) {
+                                            events.filter { e ->
+                                                val q = eventSearchText.trim()
+                                                if (q.isEmpty()) true else {
+                                                    val s = q.lowercase()
+                                                    e.title.lowercase().contains(s) ||
+                                                    e.location.lowercase().contains(s) ||
+                                                    e.defectNo.lowercase().contains(s)
+                                                }
+                                            }.map { it.id }
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "Invert",
+                                                color = Color(0xFF1976D2),
+                                                fontSize = 12.sp,
+                                                modifier = Modifier.clickable {
+                                                    visibleIds.forEach { id ->
+                                                        if (selectedEventIds.contains(id)) selectedEventIds.remove(id) else selectedEventIds.add(id)
+                                                    }
+                                                }
+                                            )
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = "Select All",
+                                                color = Color(0xFF1976D2),
+                                                fontSize = 12.sp,
+                                                modifier = Modifier.clickable {
+                                                    val toAdd = visibleIds.filterNot { selectedEventIds.contains(it) }
+                                                    selectedEventIds.addAll(toAdd)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3) 列表内容：与父 LazyColumn 合并，避免嵌套滚动
+                if (selectedTab == 0) {
+                    val filteredDefects = if (defectSearchText.isBlank()) defects else defects.filter {
+                        it.no.contains(defectSearchText, ignoreCase = true) || it.riskRating.contains(defectSearchText, ignoreCase = true)
+                    }
+                    items(filteredDefects) { item ->
+                        HistoryDefectCard(
+                            item = item,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            onClick = { onOpenDefect(item.no) },
+                            onCreateEvent = { onCreateEventForDefect(item.no) }
+                        )
+                    }
+                    // 移除历史 Defects 列表的空数据英文提示：当列表为空时不插入额外占位项
+                } else {
+                    val filteredEvents = if (eventSearchText.isBlank()) events else events.filter { event ->
+                        event.title.contains(eventSearchText, ignoreCase = true) ||
+                        event.location.contains(eventSearchText, ignoreCase = true) ||
+                        event.defectNo.contains(eventSearchText, ignoreCase = true)
+                    }
+                    items(filteredEvents) { item ->
+                        val checked = selectedEventIds.contains(item.id)
+                        val uploading = uploadingIds.contains(item.id)
+                        EventCard(
+                            item = item,
+                            selectionMode = isEventSelectMode,
+                            checked = checked,
+                            uploading = uploading,
+                            onToggle = {
+                                if (selectedEventIds.contains(item.id)) selectedEventIds.remove(item.id) else selectedEventIds.add(item.id)
+                            },
+                            onOpen = { onOpenEvent(item.id) },
+                            onSync = {
+                                if (notFinishedProjects.isEmpty()) {
+                                    scope.launch {
+                                        Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
+                                        uploadingIds.clear()
+                                        uploadingIds.add(item.id)
+                                        runCatching {
+                                            val eventItem = events.find { it.id == item.id }
+                                            if (eventItem == null) {
+                                                throw IllegalArgumentException("Event not found with id: ${item.id}")
+                                            }
+                                            val result = viewModel.uploadSingleEventWithRetry(
+                                                eventUid = eventItem.uid,
+                                                projectUid = projectUid ?: "",
+                                                maxRetries = 5,
+                                                delayMs = 3000L
+                                            )
+                                            uploadingIds.clear()
+                                            Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
+                                        }.onFailure { exception ->
+                                            uploadingIds.clear()
+                                            Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                } else {
+                                    pendingSingleSyncEventId = item.id
+                                    showProjectPicker = true
+                                }
+                            }
+                        )
+                    }
+                    // 移除 Events 列表的空数据英文提示：当列表为空时不插入额外占位项
+                    // 当底部 Bulk Sync 底栏显示时，为避免遮挡最后一条事件，增加底部留白
+                    item {
+                        // 列表底部留白：非选择模式的固定按钮与选择模式的工具栏均可能遮挡最后一条事件
+                        val spacerHeight = when {
+                            isEventSelectMode -> 88.dp
+                            !isEventSelectMode && !syncProgress.running -> 80.dp
+                            else -> 0.dp
+                        }
+                        Spacer(modifier = Modifier.height(spacerHeight))
+                    }
+                }
             }
 
+            // 底部覆盖层：当进入选择模式时，展示选择数量与“Bulk Sync”确认
             if (selectedTab == 1 && isEventSelectMode) {
                 Surface(tonalElevation = 6.dp, shadowElevation = 8.dp, color = Color.White, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Selected ${selectedEventIds.size} items", color = Color(0xFF666666), fontSize = 12.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = "Selected ${selectedEventIds.size} items", color = Color(0xFF666666), fontSize = 12.sp)
+                        }
                         Spacer(modifier = Modifier.weight(1f))
                         TextButton(onClick = {
                             isEventSelectMode = false
@@ -409,47 +553,168 @@ fun ProjectDetailScreen(
                                 isEventSelectMode = false
                                 selectedEventIds.clear()
                                 if (ids.isEmpty()) return@Button
-                                scope.launch {
-                                    // 1) 提示：同步初始化中
-                                    Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
-                                    // 2) 展示逐项转圈：先将所有选中 ID 标记为上传中
-                                    uploadingIds.clear()
-                                    uploadingIds.addAll(ids)
-                                    // 3) 批量上传所有选中的事件
-                                    runCatching {
-                                        val result = viewModel.uploadSelectedEvents(
-                                            context = context,
-                                            eventUids = ids.mapNotNull { id -> 
-                                                events.find { it.id == id }?.uid 
-                                            }, // 将id转换为uid传递
-                                            projectUid = projectUid ?: ""
-                                        )
-                                        // 上传完成后清除所有转圈状态
+                                if (notFinishedProjects.isEmpty()) {
+                                    scope.launch {
+                                        Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
                                         uploadingIds.clear()
-                                        // 显示上传结果
-                                        if (result.first) {
-                                            Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "Sync failed: ${result.second}", Toast.LENGTH_LONG).show()
+                                        uploadingIds.addAll(ids)
+                                        runCatching {
+                                            val result = viewModel.uploadSelectedEventsWithRetry(
+                                                context = context,
+                                                eventUids = ids.mapNotNull { id ->
+                                                    events.find { it.id == id }?.uid
+                                                },
+                                                projectUid = projectUid ?: "",
+                                                maxRetries = 5,
+                                                delayMs = 3000L
+                                            )
+                                            uploadingIds.clear()
+                                            if (result.first) {
+                                                Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "Sync failed: ${result.second}", Toast.LENGTH_LONG).show()
+                                            }
+                                        }.onFailure { exception ->
+                                            uploadingIds.clear()
+                                            Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
                                         }
-                                    }.onFailure { exception ->
-                                        // 失败场景：清除转圈状态并显示错误信息
-                                        uploadingIds.clear()
-                                        Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
                                     }
+                                } else {
+                                    pendingBatchEventIds.clear()
+                                    pendingBatchEventIds.addAll(ids)
+                                    showProjectPicker = true
                                 }
                             },
-                            shape = RoundedCornerShape(8.dp)
-                        ) { Text("Confirm") }
+                            shape = RoundedCornerShape(18.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0B2E66)),
+                            modifier = Modifier.height(36.dp).width(110.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        ) { Text("Confirm", color = Color.White, fontSize = 12.sp) }
+                    }
+                }
+            }
+
+            // 底部覆盖层：非选择模式时固定显示“Bulk Sync”，点击进入选择模式
+            if (selectedTab == 1 && !isEventSelectMode && !syncProgress.running) {
+                Surface(
+                    color = Color.White,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                ) {
+                    Button(
+                        onClick = {
+                            isEventSelectMode = true
+                            selectedEventIds.clear()
+                        },
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF0B2E66),
+                            disabledContainerColor = Color(0xFFB0BEC5)
+                        ),
+                        enabled = events.isNotEmpty()
+                    ) { Text(text = "Bulk Sync", color = Color.White) }
+                }
+            }
+
+            if (selectedTab == 1 && !isEventSelectMode && syncProgress.running) {
+                Surface(tonalElevation = 6.dp, shadowElevation = 8.dp, color = Color.White, modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(text = "Synced ${syncProgress.completed} / ${syncProgress.total}", color = Color(0xFF666666), fontSize = 12.sp)
+                        }
+                        Spacer(modifier = Modifier.weight(1f))
+                        Text(text = "Sync in progress", color = Color(0xFF1976D2), fontSize = 12.sp)
                     }
                 }
             }
         }
     }
+
+    // 统一的项目选择底部弹窗（支持单个与批量事件同步前选择目标项目）
+    if (showProjectPicker) {
+        ProjectPickerBottomSheet(
+            projects = notFinishedProjects,
+            defaultProjectUid = projectUid,
+            onConfirm = { targetProject ->
+                showProjectPicker = false
+                val chosenUid = targetProject.projectUid
+                scope.launch {
+                    // 单个事件待同步
+                    val singleId = pendingSingleSyncEventId
+                    if (singleId != null) {
+                        pendingSingleSyncEventId = null
+                        Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
+                        uploadingIds.clear()
+                        uploadingIds.add(singleId)
+                        runCatching {
+                            val eventItem = events.find { it.id == singleId }
+                            if (eventItem == null) {
+                                throw IllegalArgumentException("Event not found with id: $singleId")
+                            }
+                            val result = viewModel.uploadSingleEventWithRetry(
+                                eventUid = eventItem.uid,
+                                projectUid = chosenUid,
+                                maxRetries = 5,
+                                delayMs = 3000L
+                            )
+                            uploadingIds.clear()
+                            Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
+                        }.onFailure { exception ->
+                            uploadingIds.clear()
+                            Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
+                        }
+                        return@launch
+                    }
+
+                    // 批量事件待同步
+                    if (pendingBatchEventIds.isNotEmpty()) {
+                        val ids = pendingBatchEventIds.toList()
+                        pendingBatchEventIds.clear()
+                        Toast.makeText(context, "Sync initializing", Toast.LENGTH_SHORT).show()
+                        uploadingIds.clear()
+                        uploadingIds.addAll(ids)
+                        runCatching {
+                            val result = viewModel.uploadSelectedEventsWithRetry(
+                                context = context,
+                                eventUids = ids.mapNotNull { id -> events.find { it.id == id }?.uid },
+                                projectUid = chosenUid,
+                                maxRetries = 5,
+                                delayMs = 3000L
+                            )
+                            uploadingIds.clear()
+                            if (result.first) {
+                                Toast.makeText(context, "Sync completed", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Sync failed: ${result.second}", Toast.LENGTH_LONG).show()
+                            }
+                        }.onFailure { exception ->
+                            uploadingIds.clear()
+                            Toast.makeText(context, "Sync failed: ${exception.message}", Toast.LENGTH_LONG).show()
+                        }
+                        return@launch
+                    }
+                }
+            },
+            onDismiss = {
+                showProjectPicker = false
+                pendingSingleSyncEventId = null
+                pendingBatchEventIds.clear()
+            }
+        )
+    }
     
-    // 排序对话框
+    // 排序底部弹窗（按箭头调整顺序，按钮固定在底部）
     if (showSortDialog) {
-        DefectSortDialog(
+        DefectSortBottomSheetByArrow(
             defects = defects,
             onDismiss = { showSortDialog = false },
             onConfirm = { reorderedDefects ->
@@ -458,6 +723,217 @@ fun ProjectDetailScreen(
                 showSortDialog = false
             }
         )
+    }
+}
+
+/**
+ * 缺陷排序底部弹窗（箭头排序版本）
+ *
+ * 需求对齐：
+ * 1) 从底部弹出，并固定底部按钮（Cancel/Confirm）；
+ * 2) 列表布局参考历史缺陷卡片样式，但不显示图片与 +Event 按钮；
+ * 3) 上移/下移图标放在每条卡片的右下角，点击进行相邻交换。
+ *
+ * @param defects 待排序的历史缺陷列表
+ * @param onDismiss 关闭弹窗回调
+ * @param onConfirm 确认排序回调，返回新的顺序
+ */
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun DefectSortBottomSheetByArrow(
+    defects: List<HistoryDefectItem>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<HistoryDefectItem>) -> Unit
+){
+    var sortableDefects by remember { mutableStateOf(defects) }
+    // 使底部弹窗默认全屏展开，避免半展开状态
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.fillMaxHeight()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            // 顶部标题与关闭
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Sort Defects",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Tap arrows to reorder defects",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+            // 列表区域占满剩余空间，按钮固定在底部
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                itemsIndexed(
+                    items = sortableDefects,
+                    key = { _, item -> item.no }
+                ) { index, item ->
+                    SortDefectListItem(
+                        item = item,
+                        index = index,
+                        isFirst = index == 0,
+                        isLast = index == sortableDefects.lastIndex,
+                        onMoveUp = {
+                            if (index > 0) {
+                                val newList = sortableDefects.toMutableList()
+                                val tmp = newList[index - 1]
+                                newList[index - 1] = newList[index]
+                                newList[index] = tmp
+                                sortableDefects = newList
+                            }
+                        },
+                        onMoveDown = {
+                            if (index < sortableDefects.size - 1) {
+                                val newList = sortableDefects.toMutableList()
+                                val tmp = newList[index + 1]
+                                newList[index + 1] = newList[index]
+                                newList[index] = tmp
+                                sortableDefects = newList
+                            }
+                        }
+                    )
+                }
+            }
+
+            // 底部按钮固定展示
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFF666666)
+                    ),
+                    border = BorderStroke(1.dp, Color(0xFFE0E0E0))
+                ) {
+                    Text("Cancel")
+                }
+
+                Button(
+                    onClick = { onConfirm(sortableDefects) },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF1976D2)
+                    )
+                ) {
+                    Text("Confirm", color = Color.White)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 排序弹窗中的单条缺陷卡片（复用历史缺陷样式的简化版）
+ * - 顶部：缺陷编号与风险标签
+ * - 底部：左侧显示 `Related Events {count}`；右侧是上移/下移箭头（在底部右侧）。
+ * - 移除图片缩略图与 +Event 按钮以满足设计。
+ *
+ * @param item 当前缺陷数据
+ * @param index 当前索引，用于显示序号或交换判断
+ * @param isFirst 是否第一项（禁用上移）
+ * @param isLast 是否最后一项（禁用下移）
+ * @param onMoveUp 点击上移回调
+ * @param onMoveDown 点击下移回调
+ */
+@Composable
+private fun SortDefectListItem(
+    item: HistoryDefectItem,
+    index: Int,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            // 顶部：编号与风险标签
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "No.${item.no}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF222222),
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (item.riskRating.isNotBlank()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    RiskLevelTag(riskLevel = item.riskRating)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            // 底部：左侧事件计数，右侧上下箭头
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Related Events ${item.eventCount}",
+                    fontSize = 12.sp,
+                    color = Color(0xFF666666)
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(onClick = onMoveUp, enabled = !isFirst) {
+                        Icon(
+                            imageVector = Icons.Filled.ArrowUpward,
+                            contentDescription = "Move Up",
+                            tint = if (!isFirst) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = onMoveDown, enabled = !isLast) {
+                        Icon(
+                            imageVector = Icons.Filled.ArrowDownward,
+                            contentDescription = "Move Down",
+                            tint = if (!isLast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -473,7 +949,6 @@ private fun DefectSortDialog(
     onConfirm: (List<HistoryDefectItem>) -> Unit
 ) {
     var sortableDefects by remember { mutableStateOf(defects) }
-    var draggedIndex by remember { mutableIntStateOf(-1) }
     
     Dialog(
         onDismissRequest = onDismiss,
@@ -515,14 +990,14 @@ private fun DefectSortDialog(
                 
                 // 提示文本
                 Text(
-                    text = "Long press and drag to reorder defects",
+                    text = "Tap arrows to reorder defects",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 
                 Spacer(modifier = Modifier.height(16.dp))
                 
-                // 可排序列表 - 添加拖拽预览效果
+                // 可排序列表 - 点击上下箭头交换相邻项，并添加位置动画
                 LazyColumn(
                     modifier = Modifier
                         .weight(1f)
@@ -533,65 +1008,129 @@ private fun DefectSortDialog(
                         items = sortableDefects,
                         key = { _, item -> item.no }
                     ) { index, item ->
-                        // 添加拖拽目标位置指示器
-                        if (draggedIndex != -1 && index == draggedIndex) {
-                            // 拖拽占位符 - 显示拖拽目标位置
-                            Card(
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(88.dp)
-                                    .alpha(0.3f),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
-                                ),
-                                border = BorderStroke(
-                                    2.dp, 
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                                )
+                                    .padding(16.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
+                                // 信息区域（左上角）
+                                Column(
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .fillMaxWidth()
                                 ) {
                                     Text(
-                                        text = "Drop here",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                        text = "Defect",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    // 缺陷编号单独一行且禁止换行
+                                    Text(
+                                        text = item.no,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        softWrap = false
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Risk: ${item.riskRating} | Events: ${item.eventCount}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (item.images.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Image,
+                                                    contentDescription = "Images",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Text(
+                                                    text = "${item.images.size}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.padding(start = 4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
-                            }
-                        }
-                        
-                        SimpleDraggableDefectItem(
-                            item = item,
-                            index = index,
-                            isDragging = draggedIndex == index,
-                            onDragStart = { draggedIndex = index },
-                            onDragEnd = { draggedIndex = -1 },
-                            onMove = { fromIndex, toIndex ->
-                                // 优化的实时位置交换逻辑
-                                if (fromIndex != toIndex && 
-                                    fromIndex in sortableDefects.indices && 
-                                    toIndex in sortableDefects.indices) {
-                                    
-                                    Log.d("DefectSortDialog", "位置交换: $fromIndex -> $toIndex")
-                                    
-                                    // 创建新列表并交换位置
-                                    val newList = sortableDefects.toMutableList()
-                                    
-                                    // 安全的位置交换 - 移除并插入
-                                    if (fromIndex < newList.size && toIndex < newList.size) {
-                                        val item = newList.removeAt(fromIndex)
-                                        newList.add(toIndex, item)
-                                        
-                                        // 立即更新状态，触发重组
-                                        sortableDefects = newList
-                                        
-                                        Log.d("DefectSortDialog", "交换完成，新顺序: ${newList.map { it.no }}")
+
+                                // 右下角的上下箭头按钮
+                                Row(
+                                    modifier = Modifier.align(Alignment.BottomEnd),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            if (index > 0) {
+                                                val newList = sortableDefects.toMutableList()
+                                                val tmp = newList[index - 1]
+                                                newList[index - 1] = newList[index]
+                                                newList[index] = tmp
+                                                sortableDefects = newList
+                                            }
+                                        },
+                                        enabled = index > 0
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowUpward,
+                                            contentDescription = "Move up",
+                                            tint = if (index > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (index < sortableDefects.size - 1) {
+                                                val newList = sortableDefects.toMutableList()
+                                                val tmp = newList[index + 1]
+                                                newList[index + 1] = newList[index]
+                                                newList[index] = tmp
+                                                sortableDefects = newList
+                                            }
+                                        },
+                                        enabled = index < sortableDefects.size - 1
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowDownward,
+                                            contentDescription = "Move down",
+                                            tint = if (index < sortableDefects.size - 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
                                 }
                             }
-                        )
+                        }
+                    }
+                    if (sortableDefects.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillParentMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "No data available",
+                                    color = Color(0xFF9E9E9E),
+                                    fontSize = 14.sp
+                                )
+                            }
+                        }
                     }
                 }
                 
@@ -1045,7 +1584,20 @@ fun ProjectDetailScreenLegacy(
     )
 }
 
-// 顶部概览卡片
+/**
+ * 顶部概览模块（去卡片化版本）。
+ *
+ * - 使用全宽深蓝背景，无外部留白与阴影，确保与导航栏视觉连续。
+ * - 项目描述直接展示，最多两行，超出两行显示省略号（不再支持展开/收起）。
+ * - 右侧保留白色胶囊 "New" 按钮。
+ *
+ * @param projectName 当前项目名称
+ * @param projectDescription 当前项目描述（null 或空视为无）
+ * @param isDescriptionExpanded 兼容旧参数，当前不使用（已移除展开/收起逻辑）
+ * @param onToggleDescription 兼容旧参数，当前不使用（已移除展开/收起逻辑）
+ * @param onCreateEvent 点击 "New" 按钮的回调
+ * @param onOpenProjectInfo 点击标题右侧箭头打开项目详情的回调
+ */
 @Composable
 private fun OverviewCard(
     projectName: String,
@@ -1053,88 +1605,54 @@ private fun OverviewCard(
     isDescriptionExpanded: Boolean,
     onToggleDescription: () -> Unit,
     onCreateEvent: () -> Unit,
-    // 新增：点击标题右侧箭头打开项目详情
     onOpenProjectInfo: () -> Unit
 ) {
-    Card(
+    // 外层使用 Box + 深蓝背景，全宽显示，无外边距
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            .background(Color(0xFF0B2E66))
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 16.dp)
         ) {
             // 顶部：项目标题 + 右侧箭头
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = projectName,
-                    fontSize = 18.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF333333),
+                    color = Color.White,
                     modifier = Modifier.weight(1f)
                 )
                 IconButton(onClick = onOpenProjectInfo) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                         contentDescription = "Project Detail",
-                        tint = Color(0xFF666666)
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
                     )
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            // 描述信息：使用project_description，支持展开/收起状态
-            // 过滤null值，将null视为空内容
+
+            // 描述信息：最多两行，超出显示省略号；过滤 "null" 为无内容
             val validDescription = if (projectDescription == "null" || projectDescription.isBlank()) "" else projectDescription
-            
-            // 当有描述内容时，显示文本（根据展开状态决定是否显示）
-            if (validDescription.isNotBlank() && isDescriptionExpanded) {
+            if (validDescription.isNotBlank()) {
                 Text(
                     text = validDescription,
                     fontSize = 12.sp,
-                    color = Color(0xFF7A7A7A),
-                    modifier = Modifier.fillMaxWidth()
+                    color = Color(0xFFE2ECF9),
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(12.dp))
             }
-            // 底部：左侧收起/展开（有描述内容时始终显示），右侧右下角的 New Event 按钮
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 有描述内容时始终显示展开/收起按钮
-                if (validDescription.isNotBlank()) {
-                    Text(
-                        text = if (isDescriptionExpanded) "Collapse" else "Expand",
-                        color = Color(0xFF4A90E2),
-                        fontSize = 12.sp,
-                        modifier = Modifier.clickable {
-                            onToggleDescription()
-                        }
-                    )
-                } else {
-                    // 占位空间，保持布局一致
-                    Spacer(modifier = Modifier.width(0.dp))
-                }
-                Spacer(modifier = Modifier.weight(1f))
-                Button(
-                    onClick = onCreateEvent,
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.height(32.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "New Event", modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("New Event", fontSize = 12.sp)
-                }
-                // 关闭底部 Row
-            }
+
+            // 顶部：项目标题与项目详情入口箭头
         }
     }
 }
@@ -1176,7 +1694,9 @@ private fun EventList(
     onOpen: (String) -> Unit,
     onSync: (String) -> Unit,
     uploadingIds: List<String>,
-    events: List<EventItem>
+    events: List<EventItem>,
+    // 新增：滚动状态回传，用于驱动顶部标题动态切换
+    onScrolledChange: (Boolean) -> Unit
 ) {
     // 根据搜索关键字过滤事件列表
     val filteredEvents = remember(events, searchText) {
@@ -1191,7 +1711,15 @@ private fun EventList(
         }
     }
     
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    // 监听列表滚动以通知顶部标题切换
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
+            .distinctUntilChanged()
+            .collect { onScrolledChange(it) }
+    }
+
+    LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
         items(filteredEvents) { item ->
             val checked = selectedIds.contains(item.id)
             val uploading = uploadingIds.contains(item.id)
@@ -1235,18 +1763,22 @@ private fun PriorityTag(priority: String) {
  */
 @Composable
 private fun RiskTag(risk: String) {
-    val colorPair = RiskTagColors.getColorPair(risk)
+    // 规整风险等级文案，移除所有空白和换行，保证如 "P\n1" 正常显示为 "P1"
+    val sanitized = risk.replace(Regex("\\s+"), "").trim().uppercase()
+    val colorPair = RiskTagColors.getColorPair(sanitized)
     
     Box(
         modifier = Modifier
-            .background(colorPair.backgroundColor, RoundedCornerShape(3.dp))
-            .padding(horizontal = 4.dp, vertical = 1.dp)
+            .background(colorPair.backgroundColor, RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(
-            text = risk.trim().uppercase(), 
+            text = sanitized,
             color = colorPair.textColor, 
-            fontSize = 8.sp,
-            fontWeight = FontWeight.Bold
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Clip
         )
     }
 }
@@ -1261,8 +1793,44 @@ data class EventItem(
     val title: String,
     val location: String,
     val defectNo: String,
-    val date: String
+    val date: String,
+    val riskRating: String? = null
 )
+
+/**
+ * 组件：键值行（多行值缩进对齐）。
+ * 说明：用于在卡片中显示例如“DefectNo: xxx, yyy”的键值对，
+ * 当值需要换行时，其后续行会与第一行的值左侧对齐（即与键的右侧对齐），
+ * 保证视觉上与上一行 No 对齐，不会从键下方开始。
+ *
+ * 参数：
+ * - label: 左侧标签文本（如 "DefectNo:"、"Location:"）。
+ * - value: 右侧值文本，支持换行与省略。
+ */
+@Composable
+private fun KeyValueRow(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    labelWidth: Dp = 72.dp
+ ) {
+    Row(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            color = Color(0xFF666666),
+            modifier = Modifier.width(labelWidth),
+            maxLines = 1,
+            overflow = TextOverflow.Clip
+        )
+        Text(
+            text = value,
+            fontSize = 12.sp,
+            color = Color(0xFF666666),
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
 
 /**
  * One item card of Event list.
@@ -1288,7 +1856,8 @@ private fun EventCard(
     onOpen: () -> Unit,
     onSync: () -> Unit = {}
 ) {
-    val rowModifier = if (selectionMode) Modifier.clickable { onToggle() } else Modifier
+    // 整卡点击：选择模式切换选中；普通模式进入详情
+    val rowModifier = Modifier.clickable { if (selectionMode) onToggle() else onOpen() }
     Card(
         modifier = rowModifier
             .fillMaxWidth()
@@ -1298,80 +1867,82 @@ private fun EventCard(
         elevation = CardDefaults.cardElevation(1.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (selectionMode) {
-                    Checkbox(checked = checked, onCheckedChange = { onToggle() })
-                    Spacer(modifier = Modifier.width(6.dp))
-                }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 if (uploading) {
                     CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                     Spacer(modifier = Modifier.width(6.dp))
                 }
-                Text(
-                    text = item.title, 
-                    fontWeight = FontWeight.SemiBold, 
-                    fontSize = 14.sp,
-                    modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
-                )
+                // 标题 + 风险标签组合：统一放在同一行，风险标签紧随标题
+                Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = item.title,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    val riskText = item.riskRating?.takeIf { it.isNotBlank() }
+                    if (riskText != null) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        RiskTag(riskText)
+                    }
+                }
+                if (selectionMode) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Checkbox(checked = checked, onCheckedChange = { onToggle() })
+                }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Location: ${item.location}", 
-                fontSize = 12.sp, 
-                color = Color(0xFF666666),
-                modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
-            )
-            Text(
-                text = "DefectNo: ${item.defectNo}", 
-                fontSize = 12.sp, 
-                color = Color(0xFF666666),
-                modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
-            )
+            KeyValueRow(label = "Location:", value = item.location)
+            KeyValueRow(label = "DefectNo:", value = item.defectNo)
             Spacer(modifier = Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = item.date, 
                     fontSize = 11.sp, 
                     color = Color(0xFF9E9E9E),
-                    modifier = if (!selectionMode) Modifier.clickable { onOpen() } else Modifier
+                    modifier = Modifier
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 if (!selectionMode) {
-                    // 同步按钮
+                    // 同步按钮（在按钮内部将上传图标放在文本前面）
                     Button(
                         onClick = onSync,
                         enabled = !uploading,
                         modifier = Modifier
                             .height(28.dp)
-                            .width(60.dp),
-                        shape = RoundedCornerShape(6.dp),
+                            .width(72.dp),
+                        shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF4A90E2)
+                            containerColor = Color(0xFFE9F2FF),
+                            contentColor = Color(0xFF0B2E66)
                         ),
                         contentPadding = PaddingValues(0.dp)
                     ) {
                         if (uploading) {
                             CircularProgressIndicator(
-                                color = Color.White,
+                                color = Color(0xFF0B2E66),
                                 strokeWidth = 1.5.dp,
                                 modifier = Modifier.size(12.dp)
                             )
                         } else {
-                            Text(
-                                text = "Sync",
-                                fontSize = 10.sp,
-                                color = Color.White,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.FileUpload,
+                                    contentDescription = "Upload",
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Sync",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF0B2E66),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Details >", 
-                        color = Color(0xFF4A90E2), 
-                        fontSize = 12.sp,
-                        modifier = Modifier.clickable { onOpen() }
-                    )
                 }
             }
         }
@@ -1389,14 +1960,24 @@ private fun HistoryDefectList(
     // 新增：点击缺陷项时回调，传递缺陷编号 no
     onOpenDefect: (String) -> Unit,
     // 新增：点击新增事件时回调，传递缺陷编号 no
-    onCreateEventForDefect: (String) -> Unit
+    onCreateEventForDefect: (String) -> Unit,
+    // 新增：滚动状态回传，用于驱动顶部标题动态切换
+    onScrolledChange: (Boolean) -> Unit
 ) {
     val filtered = remember(searchText, defects) {
         val keyword = searchText.trim()
         if (keyword.isEmpty()) defects
         else defects.filter { it.no.contains(keyword, ignoreCase = true) || it.riskRating.contains(keyword, ignoreCase = true) }
     }
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    // 监听列表滚动以通知顶部标题切换
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
+            .distinctUntilChanged()
+            .collect { onScrolledChange(it) }
+    }
+
+    LazyColumn(modifier = Modifier.fillMaxSize(), state = listState) {
         items(filtered) { item ->
             HistoryDefectCard(
                 item = item,
@@ -1443,24 +2024,24 @@ private fun HistoryDefectCard(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            // 标题布局：缺陷编号和风险等级标签
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 缺陷编号文本
+            // 标题布局：左侧单行省略的缺陷编号；右侧固定区域显示风险等级标签
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "No.${item.no}",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFF222222),
-                    modifier = Modifier.weight(1f, fill = false)
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
-                
-                // 风险等级标签
+                Spacer(modifier = Modifier.width(8.dp))
+                // 右侧风险标签：为空时预留固定宽度，避免标题将其挤没
+                val reservedTagWidth = 44.dp
                 if (item.riskRating.isNotBlank()) {
-                    Spacer(modifier = Modifier.width(8.dp))
                     RiskLevelTag(riskLevel = item.riskRating)
+                } else {
+                    Box(modifier = Modifier.width(reservedTagWidth))
                 }
             }
             
@@ -1472,28 +2053,30 @@ private fun HistoryDefectCard(
                 )
             }
             
-            // 关联事件数量和新增链接（调整到最右侧显示）
+            // 关联事件数量与新增事件按钮（底部左侧为计数，右侧为按钮）
             Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Spacer(modifier = Modifier.weight(1f)) // 推送到右侧
                 Text(
-                    text = "Related Events: ${item.eventCount}",
+                    text = "Related Events ${item.eventCount}",
                     fontSize = 12.sp,
                     color = Color(0xFF666666)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Add New",
-                    fontSize = 12.sp,
-                    color = Color(0xFF2196F3),
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.clickable { 
-                        onCreateEvent()
-                    }
-                )
+                Spacer(modifier = Modifier.weight(1f))
+                Button(
+                    onClick = { onCreateEvent() },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFE9F2FF),
+                        contentColor = Color(0xFF0B2E66)
+                    ),
+                    modifier = Modifier.height(28.dp).width(72.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text(text = "+ Event", fontSize = 10.sp, fontWeight = FontWeight.Medium, color = Color(0xFF0B2E66))
+                }
             }
         }
     }
@@ -1627,3 +2210,7 @@ private fun LargePhotoDialogForPath(path: String, onDismiss: () -> Unit) {
         }
     }
 }
+/**
+ * 文件级工具：禁用点击水波纹的 Indication。
+ * 用于移除 Tab 点击时的背景动态效果（ripple）。
+ */

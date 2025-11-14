@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.simsapp.data.local.entity.ProjectEntity
 import com.simsapp.data.repository.ProjectRepository
 import com.simsapp.data.repository.EventRepository
+import com.simsapp.data.repository.DefectRepository
 import com.simsapp.domain.usecase.CleanStorageUseCase
 import com.simsapp.utils.NetworkUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -27,6 +28,9 @@ import com.simsapp.data.local.dao.ProjectDetailDao
 import kotlinx.coroutines.flow.map
 import org.json.JSONObject
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import com.simsapp.ui.dashboard.ProjectSyncProgress
 
 /**
  * DashboardViewModel
@@ -45,6 +49,7 @@ import kotlinx.coroutines.flow.combine
 class DashboardViewModel @Inject constructor(
     private val projectRepository: ProjectRepository,
     private val eventRepository: EventRepository,
+    private val defectRepository: DefectRepository,
     private val cleanStorageUseCase: CleanStorageUseCase,
     private val projectDetailDao: ProjectDetailDao,
     val networkUtils: NetworkUtils // 暴露给UI层使用
@@ -143,6 +148,98 @@ class DashboardViewModel @Inject constructor(
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyMap()
             )
+
+    /**
+     * Completed（Past 90 days）：过去90天 FINISHED 状态的项目数。
+     */
+    val completedCount: StateFlow<Int> =
+        projects
+            .map { list ->
+                val now = System.currentTimeMillis()
+                val cutoff = now - 90L * 24 * 60 * 60 * 1000
+                list.count { p ->
+                    val status = normalizeStatus(p.status)
+                    val relationTime = p.ralationTime ?: 0L
+                    status == "FINISHED" && relationTime >= cutoff
+                }
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = 0
+            )
+
+    /**
+     * 过去90天处于 COLLECTING 状态的项目 UID 列表。
+     */
+    val collectingProjectUids90: StateFlow<List<String>> =
+        projects
+            .map { list ->
+                val now = System.currentTimeMillis()
+                val cutoff = now - 90L * 24 * 60 * 60 * 1000
+                list.filter { p ->
+                    val status = normalizeStatus(p.status)
+                    val relationTime = p.ralationTime ?: 0L
+                    status == "COLLECTING" && relationTime >= cutoff
+                }
+                    .mapNotNull { it.projectUid }
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
+
+    /**
+     * Historical Defects：collectingProjectUids90 下的所有缺陷总数。
+     */
+    val historicalDefectsTotal: StateFlow<Int> =
+        collectingProjectUids90
+            .flatMapLatest { uids ->
+                if (uids.isEmpty()) flowOf(0) else defectRepository.countDefectsByProjectUids(uids)
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = 0
+            )
+
+    /**
+     * Linked Events：collectingProjectUids90 下 event_count>0 的缺陷数量。
+     */
+    val linkedEventsTotal: StateFlow<Int> =
+        collectingProjectUids90
+            .flatMapLatest { uids ->
+                if (uids.isEmpty()) flowOf(0) else defectRepository.countLinkedDefectsByProjectUids(uids)
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = 0
+            )
+
+    /**
+     * Unlinked Events：事件表中 defect_uids 为空列表或 NULL 的数量。
+     */
+    val unlinkedEventsTotal: StateFlow<Int> =
+        eventRepository.countUnlinkedEvents()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = 0
+            )
+
+    /**
+     * Incomplete：Historical Defects - Linked Events；最小为0。
+     */
+    val incompleteTotal: StateFlow<Int> =
+        combine(historicalDefectsTotal, linkedEventsTotal) { h, l ->
+            (h - l).coerceAtLeast(0)
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = 0
+        )
 
     /**
      * 新增：柱状图数据（基于COLLECTING状态的项目）
@@ -261,6 +358,16 @@ class DashboardViewModel @Inject constructor(
             initialValue = SyncUiState()
         )
 
+    /**
+     * 项目同步进度流（X/Y）。
+     * - completed: 已完成项目数
+     * - total: 需更新项目总数（增量）
+     * - isLoading: 是否处于同步中（用于控制叠层显示）
+     * - message: UI文案
+     */
+    private val _projectSyncProgress = MutableStateFlow(ProjectSyncProgress())
+    val projectSyncProgress: StateFlow<ProjectSyncProgress> = _projectSyncProgress
+
     /** 对外暴露的清理状态流 */
     private val _cleanState = MutableStateFlow(CleanUiState())
     val cleanState: StateFlow<CleanUiState> = _cleanState
@@ -370,12 +477,34 @@ class DashboardViewModel @Inject constructor(
         }
         
         Log.i("SIMS-SYNC", "Network check passed, starting sync")
-        _syncState.value = SyncUiState(isLoading = true)
+        // 不立即显示遮罩，等待仓库给出需更新总数（避免无更新场景出现遮罩）
         viewModelScope.launch {
             val result = projectRepository.syncProjectsFromEndpoint(
                 endpoint = projectListEndpoint,
                 username = username,
-                authorization = authorization
+                authorization = authorization,
+                onProjectProgress = { completed, total ->
+                    // 首次获取到总数后，根据是否有需更新项目决定是否显示遮罩
+                    if (total <= 0) {
+                        // 无更新：不显示遮罩，直接英文提示
+                        if (_syncState.value.isLoading) {
+                            _syncState.value = SyncUiState(isLoading = false, count = 0, error = null)
+                        }
+                        _projectSyncProgress.value = ProjectSyncProgress(0, 0, false, null)
+                        _uiEvents.tryEmit(UiEvent.ShowMessage("All projects are up to date. No updates required."))
+                    } else {
+                        // 有更新：显示遮罩并更新进度
+                        if (!_syncState.value.isLoading) {
+                            _syncState.value = SyncUiState(isLoading = true)
+                        }
+                        _projectSyncProgress.value = ProjectSyncProgress(
+                            completed = completed,
+                            total = total,
+                            isLoading = true,
+                            // message = "Syncing projects"
+                        )
+                    }
+                }
             )
             result
                 .onSuccess { count ->
@@ -390,19 +519,30 @@ class DashboardViewModel @Inject constructor(
                     // 查询当前数据库中的项目总数，便于通过 logcat 验证
                     try {
                         val total = projectRepository.getProjectCount()
-                        Log.i("SIMS-SYNC", "Sync success: inserted=$count, total=$total")
+                    Log.i("SIMS-SYNC", "Sync success: needUpdate=$count, total=$total")
                     } catch (e: Exception) {
                         Log.w("SIMS-SYNC", "Sync success but failed to read total count: ${e.message}")
                     }
-                    _syncState.value = SyncUiState(isLoading = false, count = count, error = null)
-                    // 关键：通过一次性事件通知 UI，避免在返回时重复提示
-                    _uiEvents.tryEmit(UiEvent.ShowMessage("Sync successful, added ${count} projects"))
+                    if (count <= 0) {
+                        // 无更新：确保遮罩关闭且不显示成功提示（已在进度回调阶段提示过）
+                        _syncState.value = SyncUiState(isLoading = false, count = 0, error = null)
+                        _projectSyncProgress.value = ProjectSyncProgress(0, 0, false, null)
+                    } else {
+                        // 有更新：关闭遮罩并提示成功（N 与需更新总数一致）
+                        _syncState.value = SyncUiState(isLoading = false, count = count, error = null)
+                        val current = _projectSyncProgress.value
+                        _projectSyncProgress.value = current.copy(isLoading = false, message = "Synchronization completed")
+                        _uiEvents.tryEmit(UiEvent.ShowMessage("Synchronization completed. Updated ${count} projects."))
+                    }
                 }
                 .onFailure { e ->
                     Log.e("SIMS-SYNC", "Sync failed: ${e.message}", e)
                     _syncState.value = SyncUiState(isLoading = false, count = null, error = e.message ?: "Unknown error")
                     // 失败也通过一次性事件通知 UI
                     _uiEvents.tryEmit(UiEvent.ShowMessage("Sync failed: ${e.message ?: "Unknown error"}"))
+                    // 失败：关闭进度叠层
+                    val current = _projectSyncProgress.value
+                    _projectSyncProgress.value = current.copy(isLoading = false, message = "Synchronization failed")
                 }
         }
     }

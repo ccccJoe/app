@@ -57,6 +57,15 @@ class EventRepository @Inject constructor(
     fun getEventsByDefectUidAndProjectUid(projectUid: String, defectUid: String): Flow<List<EventEntity>> =
         dao.getByDefectUidAndProjectUid(projectUid, defectUid)
 
+    /** Observe unsynced events by project_uid. */
+    fun getUnsyncedEventsByProjectUid(projectUid: String): Flow<List<EventEntity>> = dao.getUnsyncedByProjectUid(projectUid)
+
+    /**
+     * Observe count of events that are not linked to any defect.
+     * 对应 Unlinked Events：defect_uids 为空或空数组。
+     */
+    fun countUnlinkedEvents(): Flow<Int> = dao.countUnlinkedEvents()
+
     /** Create or update an event. */
     suspend fun upsert(event: EventEntity): Long = dao.insert(event)
     
@@ -69,11 +78,184 @@ class EventRepository @Inject constructor(
     /** Get event by UID. */
     suspend fun getEventByUid(uid: String): EventEntity? = dao.getByUid(uid)
 
+    /** Mark single event as synced by UID. */
+    suspend fun markEventSynced(uid: String) = dao.markSyncedByUid(uid)
+
+    /** Mark multiple events as synced by UIDs. */
+    suspend fun markEventsSynced(uids: List<String>) = dao.markSyncedByUids(uids)
+
     /** Delete event by id. */
     suspend fun delete(id: Long) = dao.deleteById(id)
 
     /** Delete all events for a project by project_id. */
     suspend fun deleteByProjectId(projectId: Long) = dao.deleteByProjectId(projectId)
+
+    /**
+     * 覆盖指定事件目录下 meta.json 的 projectUid / project_uid 字段。
+     * 用途：在开始同步前，根据用户选择的目标项目动态调整事件归属。
+     * @param context 应用上下文，用于定位内部 files 目录
+     * @param eventUid 事件唯一标识（目录名）
+     * @param newProjectUid 用户选择的目标项目UID
+     * @return Pair(Boolean, String) 是否成功及说明信息
+     */
+    suspend fun overrideMetaProjectUid(
+        context: Context,
+        eventUid: String,
+        newProjectUid: String
+    ): Pair<Boolean, String> {
+        return try {
+            val eventDir = File(File(context.filesDir, "events"), eventUid)
+            if (!eventDir.exists()) {
+                return false to "event dir not found: ${eventDir.absolutePath}"
+            }
+            val metaFile = File(eventDir, "meta.json")
+            if (!metaFile.exists()) {
+                // 若不存在，则创建最小meta结构
+                val init = JSONObject().apply {
+                    put("eventUid", eventUid)
+                    put("projectUid", newProjectUid)
+                    put("project_uid", newProjectUid)
+                    put("updatedAt", System.currentTimeMillis())
+                }
+                metaFile.writeText(init.toString())
+                return true to "meta.json initialized and projectUid=${newProjectUid}"
+            }
+
+            // 读取并更新
+            val text = metaFile.readText()
+            val json = try { JSONObject(text) } catch (_: Exception) { JSONObject() }
+            json.put("projectUid", newProjectUid)
+            json.put("project_uid", newProjectUid)
+            json.put("updatedAt", System.currentTimeMillis())
+            metaFile.writeText(json.toString())
+            true to "meta.json updated projectUid=${newProjectUid}"
+        } catch (e: Exception) {
+            android.util.Log.e("EventRepository", "overrideMetaProjectUid failed: ${e.message}", e)
+            false to (e.message ?: "unknown error")
+        }
+    }
+
+    /**
+     * 更新指定事件目录下 meta.json 的风险评估数据（level/score/answers）。
+     *
+     * 设计原则：
+     * - 从本地数据库读取最新的 `riskLevel`/`riskScore`/`riskAnswers`，并写入 meta.json 的 `risk` 字段。
+     * - 对 `answers` 保持原始 JSON 结构（对象或数组）；解析失败时降级为字符串或空串。
+     * - 幂等、安全：不存在 meta.json 时创建最小结构；已有字段时进行覆盖更新，不影响其他键。
+     *
+     * @param context 应用上下文
+     * @param eventUid 事件 UID（目录名）
+     * @return Pair<Boolean, String> 是否成功及信息
+     */
+    suspend fun updateMetaRiskFromDb(
+        context: Context,
+        eventUid: String
+    ): Pair<Boolean, String> {
+        return try {
+            val event = getEventByUid(eventUid)
+                ?: return false to "event not found for uid=$eventUid"
+            val eventDir = File(File(context.filesDir, "events"), eventUid)
+            if (!eventDir.exists()) {
+                return false to "event dir not found: ${eventDir.absolutePath}"
+            }
+            val metaFile = File(eventDir, "meta.json")
+            val obj = try {
+                if (metaFile.exists()) JSONObject(metaFile.readText()) else JSONObject()
+            } catch (_: Exception) { JSONObject() }
+
+            val riskObj = try { obj.optJSONObject("risk") ?: JSONObject() } catch (_: Exception) { JSONObject() }
+            // 写入等级与分数（优先数据库，回退原值）
+            run {
+                val levelDb = event.riskLevel
+                val scoreDb = event.riskScore
+                if (levelDb != null) riskObj.put("level", levelDb) else if (!riskObj.has("level")) riskObj.put("level", "")
+                if (scoreDb != null) riskObj.put("score", scoreDb) else if (!riskObj.has("score")) riskObj.put("score", 0.0)
+            }
+
+            // 写入 answers：保持原始结构
+            val answersRaw = event.riskAnswers
+            if (!answersRaw.isNullOrBlank()) {
+                var written = false
+                try {
+                    // 尝试按对象解析
+                    val objAns = JSONObject(answersRaw)
+                    riskObj.put("answers", objAns)
+                    written = true
+                } catch (_: Exception) {
+                    try {
+                        // 尝试按数组解析
+                        val arrAns = org.json.JSONArray(answersRaw)
+                        riskObj.put("answers", arrAns)
+                        written = true
+                    } catch (_: Exception) {
+                        // 降级为字符串
+                    }
+                }
+                if (!written) {
+                    riskObj.put("answers", answersRaw)
+                }
+            } else {
+                // 保持空串，避免缺键导致解析异常
+                riskObj.put("answers", "")
+            }
+
+            obj.put("risk", riskObj)
+            metaFile.writeText(obj.toString())
+            true to "meta risk updated for $eventUid"
+        } catch (e: Exception) {
+            android.util.Log.w("EventRepository", "updateMetaRiskFromDb failed for $eventUid: ${e.message}")
+            false to "updateMetaRisk error: ${e.message}"
+        }
+    }
+
+    /**
+     * 函数：updateMetaCoreFromDb
+     * 说明：将事件的核心字段（content/location/lastEditTime 以及必要的标识）从数据库更新到 meta.json。
+     * 行为：
+     * - 若事件目录或数据库记录不存在，返回失败信息；
+     * - 若 meta.json 不存在则创建，存在则仅覆盖上述核心字段；
+     * - 不修改项目归属字段（projectUid/project_uid），该字段由 overrideMetaProjectUid 负责覆盖；
+     * - 幂等、安全：重复调用会以数据库内容为准进行更新。
+     *
+     * @param context 应用上下文
+     * @param eventUid 事件 UID（目录名）
+     * @return Pair<Boolean, String> 是否成功及信息
+     */
+    suspend fun updateMetaCoreFromDb(
+        context: Context,
+        eventUid: String
+    ): Pair<Boolean, String> {
+        return try {
+            val event = getEventByUid(eventUid)
+                ?: return false to "event not found for uid=$eventUid"
+            val eventDir = File(File(context.filesDir, "events"), eventUid)
+            if (!eventDir.exists()) {
+                return false to "event dir not found: ${eventDir.absolutePath}"
+            }
+
+            val metaFile = File(eventDir, "meta.json")
+            val obj = try {
+                if (metaFile.exists()) JSONObject(metaFile.readText()) else JSONObject()
+            } catch (_: Exception) { JSONObject() }
+
+            // 写入或覆盖核心字段
+            obj.put("uid", event.uid)
+            obj.put("eventUid", event.uid)
+            obj.put("content", event.content)
+            // location 可能为 null，保持为 null 或空串以便解析安全
+            obj.put("location", event.location ?: "")
+            obj.put("lastEditTime", event.lastEditTime)
+
+            // 可选标识字段，仅在不存在时补充，避免覆盖上游覆盖逻辑
+            if (!obj.has("projectId")) obj.put("projectId", event.projectId)
+
+            metaFile.writeText(obj.toString())
+            true to "meta core updated for $eventUid"
+        } catch (e: Exception) {
+            android.util.Log.w("EventRepository", "updateMetaCoreFromDb failed for $eventUid: ${e.message}")
+            false to "updateMetaCore error: ${e.message}"
+        }
+    }
 
     /** Upload a local file to the server, returns success flag. */
     suspend fun uploadAsset(file: File, projectId: Long, eventId: Long?): Boolean = try {
@@ -428,9 +610,11 @@ class EventRepository @Inject constructor(
         var photoIndex = nextIndex(dirPhotoFiles, "photo_")
         var audioIndex = nextIndex(dirAudioFiles, "audio_")
 
-        // 如果目录中已有的媒体数量不小于数据库记录数量，则认为已完成复制，避免重复
-        val shouldCopyPhotos = eventEntity.photoFiles.isNotEmpty()
-        val shouldCopyAudios = eventEntity.audioFiles.isNotEmpty()
+        // 修复：仅当目录中的媒体数量小于数据库记录数量时才进行复制，避免重复拷贝
+        // 说明：saveEventToRoom/saveEventToLocal 已将媒体按 photo_<index>.jpg/audio_<index>.m4a 拷贝到事件目录。
+        // 在打包前的对齐阶段不应再次复制同一来源文件，否则会生成 photo_1.jpg 等重复文件。
+        val shouldCopyPhotos = dirPhotoFiles.size < eventEntity.photoFiles.size
+        val shouldCopyAudios = dirAudioFiles.size < eventEntity.audioFiles.size
 
         if (shouldCopyPhotos) {
             eventEntity.photoFiles.forEach { path ->
@@ -451,7 +635,9 @@ class EventRepository @Inject constructor(
                     val currentPhotoNames = eventDir.listFiles()
                         ?.filter { it.isFile && it.name.startsWith("photo_") }
                         ?.map { it.name } ?: emptyList()
-                    val ext = src.extension.ifBlank { "jpg" }
+                    // 统一照片扩展名为 .jpg，并在文件名中加入时间戳
+                    val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                        .format(java.util.Date(src.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()))
                     val nextIdx = run {
                         var maxIdx = -1
                         currentPhotoNames.forEach { name ->
@@ -464,7 +650,7 @@ class EventRepository @Inject constructor(
                         }
                         maxIdx + 1
                     }
-                    val targetName = "photo_${nextIdx}.${ext}"
+                    val targetName = "photo_${nextIdx}_${ts}.jpg"
                     val target = File(eventDir, targetName)
                     if (target.exists()) {
                         android.util.Log.d("EventRepository", "Photo target exists, skip: ${target.name}")
@@ -509,7 +695,10 @@ class EventRepository @Inject constructor(
                         }
                         maxIdx + 1
                     }
-                    val targetName = "audio_${nextIdx}.m4a"
+                    // 统一音频扩展名为 .m4a，并在文件名中加入时间戳
+                    val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                        .format(java.util.Date(src.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis()))
+                    val targetName = "audio_${nextIdx}_${ts}.m4a"
                     val target = File(eventDir, targetName)
                     if (target.exists()) {
                         android.util.Log.d("EventRepository", "Audio target exists, skip: ${target.name}")
@@ -533,7 +722,8 @@ class EventRepository @Inject constructor(
             metaObj.put("audioFiles", audiosArr)
 
             // 读取现有 assets（如果有），避免重复；然后以数据库为准进行合并
-            val existingAssetsMap = mutableMapOf<String, String>() // fileId -> fileName
+            // 改为保存完整对象，包含 nodeId（若存在），键为 fileId 以保持向后兼容。
+            val existingAssetsMap = mutableMapOf<String, com.simsapp.data.local.entity.DigitalAssetItem>() // fileId -> item
             run {
                 try {
                     val arr = metaObj.optJSONArray("assets")
@@ -542,7 +732,12 @@ class EventRepository @Inject constructor(
                             val obj = arr.optJSONObject(i)
                             val fid = obj?.optString("fileId") ?: ""
                             val fname = obj?.optString("fileName") ?: ""
-                            if (fid.isNotBlank()) existingAssetsMap[fid] = fname
+                            val nid = obj?.optString("nodeId")
+                            if (fid.isNotBlank()) existingAssetsMap[fid] = com.simsapp.data.local.entity.DigitalAssetItem(
+                                fileId = fid,
+                                fileName = fname,
+                                nodeId = nid?.takeIf { !it.isNullOrBlank() }
+                            )
                         }
                     }
                 } catch (_: Exception) { /* ignore */ }
@@ -551,19 +746,20 @@ class EventRepository @Inject constructor(
             // 以数据库 assets 作为权威来源，覆盖或补全
             eventEntity.assets.forEach { item ->
                 val fid = item.fileId
-                val fname = item.fileName
                 if (fid.isNotBlank()) {
-                    existingAssetsMap[fid] = fname
+                    existingAssetsMap[fid] = item
                 }
             }
 
             // 写入 assets（对象数组）与 digitalAssets（仅 fileId 列表）两套键，保证前后兼容
             val assetsArr = org.json.JSONArray()
             val digitalAssetsArr = org.json.JSONArray()
-            existingAssetsMap.forEach { (fid, fname) ->
+            existingAssetsMap.forEach { (fid, item) ->
                 val obj = org.json.JSONObject()
-                obj.put("fileId", fid)
-                obj.put("fileName", fname)
+                obj.put("fileId", item.fileId)
+                obj.put("fileName", item.fileName)
+                // 写入 nodeId（若存在），用于更精确的回显与选择
+                item.nodeId?.let { obj.put("nodeId", it) }
                 assetsArr.put(obj)
                 digitalAssetsArr.put(fid)
             }
@@ -585,6 +781,21 @@ class EventRepository @Inject constructor(
      * This function renames affected audio files to use ".m4a" extension and updates meta.json accordingly.
      * Photos are kept unchanged unless a similar issue is later reported.
      * This is a safe, idempotent operation and will only run for the current event directory before zipping.
+     */
+    /**
+     * 函数：fixLegacyPlaceholderExtensions
+     * 说明：
+     * - 修复旧版音频文件名占位符扩展（.$ext → .m4a）。
+     * - 在打包前补全 meta.json 的关键字段，包含结构缺陷详情与缺陷关联信息。
+     * - 结构缺陷详情补写逻辑：若 meta.json 中为缺失、空字符串或空对象（JSONObject.length()==0），
+     *   且数据库中存在非空的 `structuralDefectDetails`（JSON 字符串，含向导生成的 summary 字段），
+     *   则以数据库为准写入对象。
+     * 参数：
+     * - eventDir 事件目录
+     * - structuralDefectDetails 数据库中的结构缺陷详情原始 JSON 字符串
+     * - defectNosFromDb 数据库中的缺陷编号列表
+     * - defectUidsFromDb 数据库中的缺陷UID列表
+     * 返回：无（副作用：可能更新 meta.json 内容）
      */
     private fun fixLegacyPlaceholderExtensions(
         eventDir: File,
@@ -660,22 +871,31 @@ class EventRepository @Inject constructor(
             }
 
             // Ensure structuralDefectDetails exists in meta.json when available in DB
-            val existingStructAny = obj.opt("structuralDefectDetails")
-            val isMissingOrEmpty = when (existingStructAny) {
-                null -> true
-                is org.json.JSONObject -> false
-                is String -> existingStructAny.isBlank()
-                else -> false
-            }
-            if (isMissingOrEmpty && !structuralDefectDetails.isNullOrBlank()) {
-                try {
-                    val structObj = org.json.JSONObject(structuralDefectDetails)
-                    obj.put("structuralDefectDetails", structObj)
-                } catch (_: Exception) {
-                    // 如果解析失败，写入空对象确保类型为对象
-                    obj.put("structuralDefectDetails", org.json.JSONObject())
+            // 旧逻辑仅在缺失或空字符串时填充，若为空对象 {} 将被误判为“已存在”。
+            // 修复：将空对象（JSONObject.length()==0）也视为缺失，从数据库补写。
+            run {
+                val existingStructAny = obj.opt("structuralDefectDetails")
+                val isMissingOrEmpty: Boolean = when (existingStructAny) {
+                    null -> true
+                    is org.json.JSONObject -> {
+                        // 视空对象为缺失；其余保持不覆盖，避免误删已有内容
+                        try { existingStructAny.length() == 0 } catch (_: Exception) { true }
+                    }
+                    is String -> existingStructAny.isBlank()
+                    else -> true
                 }
-                changed = true
+
+                if (isMissingOrEmpty && !structuralDefectDetails.isNullOrBlank()) {
+                    try {
+                        val structObj = org.json.JSONObject(structuralDefectDetails)
+                        obj.put("structuralDefectDetails", structObj)
+                        changed = true
+                    } catch (_: Exception) {
+                        // 如果解析失败，写入空对象确保类型为对象
+                        obj.put("structuralDefectDetails", org.json.JSONObject())
+                        changed = true
+                    }
+                }
             }
 
             // Ensure defectNos populated from DB when meta.json missing or empty

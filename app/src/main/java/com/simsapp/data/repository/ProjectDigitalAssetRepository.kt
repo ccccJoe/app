@@ -222,12 +222,69 @@ class ProjectDigitalAssetRepository @Inject constructor(
                 }
             }
 
+            // 清理：移除当前项目数字资产树中不存在的本地缓存与数据库记录
+            // 仅针对file节点执行，避免误删文件夹占位记录
+            try {
+                val currentFileIds: Set<String> = assetNodes.mapNotNull { it.fileId }.toSet()
+                val pruned = pruneAssetsNotInProjectTree(projectUid = projectUid, currentFileIds = currentFileIds)
+                android.util.Log.d("ProjectDigitalAssetRepo", "Pruned $pruned obsolete assets for project uid=$projectUid")
+            } catch (e: Exception) {
+                android.util.Log.e("ProjectDigitalAssetRepo", "Error pruning obsolete assets for project uid=$projectUid", e)
+            }
+
             android.util.Log.d("ProjectDigitalAssetRepo", "Completed processing digital asset tree for project: $projectId")
             successCount to entities.size
         } catch (e: Exception) {
             android.util.Log.e("ProjectDigitalAssetRepo", "Error processing digital asset tree for project: $projectId", e)
             0 to 0
         }
+    }
+
+    /**
+     * 清理与当前项目不再关联的数字资产。
+     * 逻辑：
+     * - 取出本地表中project_uids包含当前projectUid的记录（文件型）；
+     * - 若其file_id未出现在本次解析的项目数字资产树中，则从project_uids中移除此projectUid；
+     * - 若移除后project_uids为空，则删除数据库记录并清理对应本地文件缓存；否则仅更新project_uids。
+     * @param projectUid 当前项目UID
+     * @param currentFileIds 当前项目树中的file_id集合
+     * @return 实际删除的记录数量
+     */
+    private suspend fun pruneAssetsNotInProjectTree(projectUid: String, currentFileIds: Set<String>): Int = withContext(Dispatchers.IO) {
+        val existing = projectDigitalAssetDao.getByProjectUid(projectUid)
+        var deletedCount = 0
+
+        existing.forEach { asset ->
+            val fileId = asset.fileId
+            // 仅处理文件资产（fileId不为null），避免误删文件夹记录
+            if (fileId != null && !currentFileIds.contains(fileId)) {
+                try {
+                    // 更新project_uids，移除当前项目UID
+                    val updatedJson = ProjectUidsUtils.removeProjectUidFromArray(asset.projectUids, projectUid)
+                    val remaining = ProjectUidsUtils.parseProjectUidsToList(updatedJson)
+
+                    if (remaining.isEmpty()) {
+                        // 无项目再引用：删除本地文件与数据库记录
+                        asset.localPath?.let { path ->
+                            try {
+                                val file = File(path)
+                                if (file.exists()) file.delete()
+                            } catch (_: Exception) { /* 忽略本地删除异常，继续删除DB */ }
+                        }
+                        projectDigitalAssetDao.deleteById(asset.id)
+                        deletedCount++
+                        android.util.Log.d("ProjectDigitalAssetRepo", "Deleted orphan asset fileId=$fileId, nodeId=${asset.nodeId}")
+                    } else {
+                        // 仍被其他项目引用：仅更新project_uids
+                        projectDigitalAssetDao.updateProjectUids(asset.nodeId, updatedJson, System.currentTimeMillis())
+                        android.util.Log.d("ProjectDigitalAssetRepo", "Unlinked project uid=$projectUid from asset fileId=$fileId, remain=${remaining.size}")
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ProjectDigitalAssetRepo", "Error pruning asset fileId=$fileId", e)
+                }
+            }
+        }
+        deletedCount
     }
 
     /**

@@ -43,38 +43,42 @@ object RiskTagColors {
     
     /**
      * P1级别 - 高风险
-     * 浅红色背景，深红色文字
+     * 浏览器色值: rgb(200, 6, 6) → Android Compose: 0xFFC80606
+     * 深红背景，白色文字，保障可读性与警示效果
      */
     val P1 = ColorPair(
-        backgroundColor = Color(0xFFFFEBEE), // 浅红色背景
-        textColor = Color(0xFFD32F2F) // 深红色文字
+        backgroundColor = Color(0xFFC80606), // 高风险红
+        textColor = Color.White
     )
     
     /**
      * P2级别 - 中等风险
-     * 浅橙色背景，深橙色文字
+     * 浏览器色值: rgb(237, 197, 0) → Android Compose: 0xFFEDC500
+     * 亮黄橙背景，为保证对比度使用黑色文字（白字对比度不足）
      */
     val P2 = ColorPair(
-        backgroundColor = Color(0xFFFFF3E0), // 浅橙色背景
-        textColor = Color(0xFFFF5722) // 深橙色文字
+        backgroundColor = Color(0xFFEDC500), // 中风险橙黄
+        textColor = Color.White // 黑色文字，增强对比度
     )
     
     /**
      * P3级别 - 低风险
-     * 浅黄色背景，深黄色文字
+     * 浏览器色值: rgb(65, 177, 246) → Android Compose: 0xFF41B1F6
+     * 明亮蓝背景，白色文字对比度良好
      */
     val P3 = ColorPair(
-        backgroundColor = Color(0xFFFFF8E1), // 浅黄色背景
-        textColor = Color(0xFFF57C00) // 深黄色文字
+        backgroundColor = Color(0xFF41B1F6), // 低风险蓝
+        textColor = Color.White
     )
     
     /**
      * P4级别 - 极低风险
-     * 浅绿色背景，深绿色文字
+     * 浏览器色值: rgb(6, 178, 89) → Android Compose: 0xFF06B259
+     * 绿色背景，白色文字
      */
     val P4 = ColorPair(
-        backgroundColor = Color(0xFFE8F5E8), // 浅绿色背景
-        textColor = Color(0xFF388E3C) // 深绿色文字
+        backgroundColor = Color(0xFF06B259), // 极低风险绿
+        textColor = Color.White
     )
     
     /**
@@ -133,13 +137,13 @@ object RiskTagColors {
     fun getSolidColorPair(riskLevel: String): ColorPair {
         return when (riskLevel.trim().uppercase()) {
             "P0" -> P0 // 保持原有的深红色+白色
-            "P1" -> ColorPair(Color(0xFFD32F2F), Color.White) // 红色+白色
-            "P2" -> ColorPair(Color(0xFFFF5722), Color.White) // 橙色+白色
-            "P3" -> ColorPair(Color(0xFFF57C00), Color.White) // 黄色+白色
-            "P4" -> ColorPair(Color(0xFF388E3C), Color.White) // 绿色+白色
-            "HIGH" -> ColorPair(Color(0xFFD32F2F), Color.White)
-            "MEDIUM" -> ColorPair(Color(0xFFF57C00), Color.White)
-            "LOW" -> ColorPair(Color(0xFF388E3C), Color.White)
+            "P1" -> ColorPair(Color(0xFFC80606), Color.White) // 红色+白色
+            "P2" -> ColorPair(Color(0xFFEDC500), Color(0xFF000000)) // 橙黄+黑字（可读性更佳）
+            "P3" -> ColorPair(Color(0xFF41B1F6), Color.White) // 蓝色+白色
+            "P4" -> ColorPair(Color(0xFF06B259), Color.White) // 绿色+白色
+            "HIGH" -> ColorPair(Color(0xFFC80606), Color.White)
+            "MEDIUM" -> ColorPair(Color(0xFF41B1F6), Color.White)
+            "LOW" -> ColorPair(Color(0xFF06B259), Color.White)
             else -> ColorPair(Color(0xFF9E9E9E), Color.White) // 灰色+白色
         }
     }
